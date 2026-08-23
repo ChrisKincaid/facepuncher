@@ -9,7 +9,6 @@ interface Props {
   audioBuffer?: AudioBuffer
   playhead: number
   loopRange?: { start: number; end: number }
-  loopEnabled: boolean
   currentBarIndex: number
   isRecording: boolean
   takes: Take[]
@@ -28,7 +27,6 @@ interface Props {
   onFocusBar: (barIndex: number) => void
   onEdgeChange: (barIndex: number, startSec: number, endSec: number, allowGaps: boolean) => void
   onLoopChange: (start: number, end: number) => void
-  onLoopEnabledChange: (enabled: boolean) => void
 }
 
 export function BarList({
@@ -36,7 +34,6 @@ export function BarList({
   audioBuffer,
   playhead,
   loopRange,
-  loopEnabled,
   currentBarIndex,
   isRecording,
   takes,
@@ -55,7 +52,6 @@ export function BarList({
   onFocusBar,
   onEdgeChange,
   onLoopChange,
-  onLoopEnabledChange,
 }: Props) {
   const [editingBar, setEditingBar] = useState<number | null>(null)
   const startSel = loopRange?.start ?? 0
@@ -65,19 +61,6 @@ export function BarList({
     <div className="panel">
       <div className="section-title" style={{ marginBottom: 6 }}>
         <h3>Bars</h3>
-        <div className="flex-gap">
-          <label className="flex-gap loop-toggle">
-            <input
-              type="checkbox"
-              checked={loopEnabled}
-              onChange={(e) => onLoopEnabledChange(e.target.checked)}
-            />
-            Play selected loop
-          </label>
-          <span className="loop-range-summary">
-            Loop: Bar {bars.length ? startSel + 1 : 0} - Bar {bars.length ? endSel + 1 : 0}
-          </span>
-        </div>
       </div>
 
       <div className="bar-list">

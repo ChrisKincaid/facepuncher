@@ -959,6 +959,24 @@ Use this format for each update:
 - Blocked: The recording tail may end slightly early and remains under observation. Shift Vocals updates are audible live but reset when the bar loops.
 - Next: Make the persisted Shift Vocals correction apply identically to live adjustment and every subsequent bar entry without restarting transport.
 
+- Date: 2026-08-23
+- Phase: Phase 0
+- Completed: Removed the obsolete Recording Settings and Punch Flow sections. Their count-in, pre-roll, full-verse, legacy loop, mode, and auto-advance state was disconnected from the active take workflow; duplicate BPM and navigation controls were also removed. Production build, lint, stale-reference search, and desktop browser layout checks pass.
+- Blocked: None for this cleanup.
+- Next: Fix Shift Vocals persistence across loop restarts.
+
+- Date: 2026-08-23
+- Phase: Phase 0
+- Completed: Simplified transport layout by moving the editable current/total time display into the waveform, removing the Transport label and visible jump/back/forward controls, and moving Play/Pause and Stop beneath Import Beat. Replaced fixed header-offset spacing with a column layout that reserves the waveform header's measured height, preventing overlap with the page title at desktop and mobile widths. Browser checks confirm correct containment and no horizontal overflow; build and lint pass.
+- Blocked: None for this layout change.
+- Next: Fix Shift Vocals persistence across loop restarts.
+
+- Date: 2026-08-23
+- Phase: Phase 0
+- Completed: Reworked the playback control row: removed the MVP badge, the WAV/MP3 badge, and the redundant "Choose BPM and Bar 1" helper text. Added a "?" info toggle next to Import Beat explaining file requirements, BPM, Offset, and Set Bar 1. Replaced the Stop button with a Loop toggle button that shows the active range (e.g. "Bar 1-16") and replaces the old Bars-panel checkbox/label. Added a small Back-to-start button merged visually into the left side of the Play button. Widened Play/Loop to fill most of their section width, tightened outer vertical padding, shortened "Set Bar 1 here" to "Set Bar 1", and removed the app-wide status line and the stray "s" unit label next to Offset. Build and lint pass after each change; behavior verified live in the browser.
+- Blocked: None for this round of UI changes.
+- Next: Fix Shift Vocals persistence across loop restarts.
+
 ## Immediate Next 3 Actions
 1. Fix Shift Vocals persistence across loop restarts.
 2. Confirm whether recording consistently trims the final syllable and correct the stop boundary if reproduced.

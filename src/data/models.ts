@@ -40,8 +40,6 @@ export interface MixSettings {
   barGains: Record<number, number>
 }
 
-export type PunchMode = 'punch' | 'full-verse'
-
 export interface PlaybackState {
   isPlaying: boolean
   currentTime: number

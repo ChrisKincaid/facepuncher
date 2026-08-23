@@ -1,13 +1,8 @@
 import { create } from 'zustand'
-import type { Bar, MixSettings, Project, PunchMode, Take } from '../data/models'
+import type { Bar, MixSettings, Project, Take } from '../data/models'
 
 interface UIState {
   currentBarIndex: number
-  mode: PunchMode
-  autoAdvance: boolean
-  loopCurrentBar: boolean
-  countInBars: number
-  preRollMs: number
   isRecording: boolean
   armedTakeByBar: Record<number, number[]>
   audioUrl?: string
@@ -21,12 +16,7 @@ interface StoreState extends UIState {
   setBars: (bars: Bar[]) => void
   setAudioUrl: (url?: string) => void
   setBeatFile: (file?: File) => void
-  setMode: (mode: PunchMode) => void
   setCurrentBar: (index: number) => void
-  setLoop: (enabled: boolean) => void
-  setAutoAdvance: (enabled: boolean) => void
-  setCountIn: (bars: number) => void
-  setPreRoll: (ms: number) => void
   setRecording: (flag: boolean) => void
   armTake: (barIndex: number, requestedSlot: number) => void
   disarmTake: (barIndex: number, slot?: number) => void
@@ -66,11 +56,6 @@ const defaultProject: Project = {
 export const useStore = create<StoreState>((set, get) => ({
   project: defaultProject,
   currentBarIndex: 0,
-  mode: 'punch',
-  autoAdvance: true,
-  loopCurrentBar: false,
-  countInBars: 1,
-  preRollMs: 250,
   isRecording: false,
   armedTakeByBar: {},
 
@@ -94,29 +79,9 @@ export const useStore = create<StoreState>((set, get) => ({
     set({ beatFile: file })
   },
 
-  setMode(mode) {
-    set({ mode })
-  },
-
   setCurrentBar(index) {
     const nextIndex = Math.max(0, Math.min(index, get().project.bars.length - 1))
     set({ currentBarIndex: Number.isNaN(nextIndex) ? 0 : nextIndex })
-  },
-
-  setLoop(enabled) {
-    set({ loopCurrentBar: enabled })
-  },
-
-  setAutoAdvance(enabled) {
-    set({ autoAdvance: enabled })
-  },
-
-  setCountIn(bars) {
-    set({ countInBars: Math.max(0, Math.min(4, bars)) })
-  },
-
-  setPreRoll(ms) {
-    set({ preRollMs: Math.max(0, Math.min(2000, ms)) })
   },
 
   setRecording(flag) {

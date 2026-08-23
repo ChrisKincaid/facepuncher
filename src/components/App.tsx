@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Transport } from './Transport'
 import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
-import { PunchPanel } from './PunchPanel'
 import { Mixer } from './Mixer'
 import { ExportDialog } from './ExportDialog'
 import { BarList } from './BarList'
@@ -23,11 +21,6 @@ export default function App() {
   const {
     project,
     currentBarIndex,
-    mode,
-    autoAdvance,
-    loopCurrentBar,
-    countInBars,
-    preRollMs,
     isRecording,
     armedTakeByBar,
     audioUrl,
@@ -35,12 +28,7 @@ export default function App() {
     setBars,
     setAudioUrl,
     setBeatFile,
-    setMode,
     setCurrentBar,
-    setLoop,
-    setAutoAdvance,
-    setCountIn,
-    setPreRoll,
     setRecording,
     setLatencyOffset,
     armTake,
@@ -55,7 +43,7 @@ export default function App() {
     setProject,
   } = useStore()
 
-  const [status, setStatus] = useState('Drop a beat to start (WAV/MP3, ≤10 min).')
+  const [, setStatus] = useState('Drop a beat to start (WAV/MP3, ≤10 min).')
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState(0)
   const [playhead, setPlayhead] = useState(0)
@@ -82,6 +70,7 @@ export default function App() {
   const [monitorEnabled, setMonitorEnabled] = useState(false)
   const [monitorGain, setMonitorGain] = useState(0.8)
   const [detectBusy, setDetectBusy] = useState(false)
+  const [showImportHelp, setShowImportHelp] = useState(false)
   const [loopRange, setLoopRange] = useState<{ start: number; end: number } | undefined>(undefined)
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [waveformResetKey, setWaveformResetKey] = useState(0)
@@ -94,8 +83,6 @@ export default function App() {
     const [calibrationLevel, setCalibrationLevel] = useState(0)
   const manualOffsetRef = useRef(false)
 
-  const currentBar = project.bars[currentBarIndex]
-  const barCount = project.bars.length
   const totalDuration = useMemo(
     () => project.beat.durationSec || project.bars[project.bars.length - 1]?.endSec || 0,
     [project.beat.durationSec, project.bars],
@@ -204,12 +191,8 @@ export default function App() {
       audioEngine.setLoop(project.bars[loopRange.start].startSec, project.bars[loopRange.end].endSec)
       return
     }
-    if (loopEnabled && loopCurrentBar && currentBar) {
-      audioEngine.setLoop(currentBar.startSec, currentBar.endSec)
-    } else {
-      audioEngine.setLoop(undefined, undefined)
-    }
-  }, [loopEnabled, loopCurrentBar, currentBar, loopRange, project.bars])
+    audioEngine.setLoop(undefined, undefined)
+  }, [loopEnabled, loopRange, project.bars])
 
   useEffect(() => {
     audioEngine.setMasterBeatGain(project.mix.masterBeatGain)
@@ -679,9 +662,6 @@ export default function App() {
     recordingTargetRef.current = null
     recordingPendingRef.current = false
     setStatus(`Recorded Take ${targetSlot + 1} for Bar ${recordingTarget.barIndex + 1}.`)
-    if (mode === 'punch' && autoAdvance && recordingTarget.barIndex < barCount - 1) {
-      setCurrentBar(recordingTarget.barIndex + 1)
-    }
   }
 
   const [timeEditValue, setTimeEditValue] = useState<string | null>(null)
@@ -727,7 +707,6 @@ export default function App() {
       }
       else if (key === 'n') setCurrentBar(currentBarIndex + 1)
       else if (key === 'p') setCurrentBar(currentBarIndex - 1)
-      else if (key === 'l') setLoop(!loopCurrentBar)
       else if (key === 'arrowleft')  { e.preventDefault(); nudgePlayhead(e.shiftKey ? -0.01 : e.ctrlKey ? -5 : -1) }
       else if (key === 'arrowright') { e.preventDefault(); nudgePlayhead(e.shiftKey ?  0.01 : e.ctrlKey ?  5 :  1) }
       else if (/^[1-5]$/.test(key)) {
@@ -739,7 +718,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [currentBarIndex, handlePause, handlePlay, isPlaying, loopCurrentBar, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar, setLoop])
+  }, [currentBarIndex, handlePause, handlePlay, isPlaying, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar])
 
   const handleExport = async (vocalsOnly: boolean) => {
     if (!project.beat.durationSec) return
@@ -780,31 +759,6 @@ export default function App() {
   return (
     <div className="app-layout">
       <div className="top-nav">
-        <div className="nav-left">
-          <h3 style={{ margin: 0 }}>Transport</h3>
-          {timeEditValue !== null ? (
-            <input
-              autoFocus
-              className="nav-time-edit"
-              value={timeEditValue}
-              onChange={(e) => setTimeEditValue(e.target.value)}
-              onBlur={(e) => commitTimeEdit(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitTimeEdit((e.target as HTMLInputElement).value)
-                if (e.key === 'Escape') setTimeEditValue(null)
-              }}
-            />
-          ) : (
-            <span
-              className="text-muted nav-time-display"
-              title="Click to type a time. Arrow keys nudge: plain=10ms, Shift=1ms, Ctrl=100ms"
-              onClick={() => audioLoaded && setTimeEditValue(formatTime(displayPos))}
-              style={{ cursor: audioLoaded ? 'text' : 'default' }}
-            >
-              {formatTime(displayPos)} / {formatTime(totalDuration)}
-            </span>
-          )}
-        </div>
         <div className="nav-scrub">
           <input
             type="range"
@@ -816,31 +770,43 @@ export default function App() {
             disabled={!audioLoaded}
             title="Coarse scrub"
           />
-          <HorizontalWaveformDetail
-            key={waveformResetKey}
-            audioBuffer={audioEngine.beatAudioBuffer ?? null}
-            playhead={playhead}
-            cursor={cursor}
-            isPlaying={isPlaying}
-            totalDuration={totalDuration}
-            bars={project.bars}
-            currentBarIndex={currentBarIndex}
-            onSeek={handleSeek}
-          />
-        </div>
-        <div className="nav-controls">
-          <button
-            className="secondary nav-nudge"
-            title="Jump to Bar 1"
-            disabled={!audioLoaded}
-            onClick={() => handleSeek(project.beat.offsetSec ?? 0)}
-          >&#8676;</button>
-          <button className="secondary nav-nudge" title="Back 1s [←]" disabled={!audioLoaded} onClick={() => nudgePlayhead(-1)}>&#9668;</button>
-          <button onClick={isPlaying ? handlePause : handlePlay} disabled={!audioLoaded} title={isPlaying ? 'Pause — keeps position [Space]' : 'Play from current position [Space]'}>
-            {isPlaying ? '⏸ Pause' : '▶ Play'}
-          </button>
-          <button className="secondary" onClick={handleStop} disabled={!audioLoaded} title="Stop — go to beginning">⏹ Stop</button>
-          <button className="secondary nav-nudge" title="Forward 1s [→]" disabled={!audioLoaded} onClick={() => nudgePlayhead(1)}>►</button>
+          <div className="nav-waveform-stage">
+            <HorizontalWaveformDetail
+              key={waveformResetKey}
+              audioBuffer={audioEngine.beatAudioBuffer ?? null}
+              playhead={playhead}
+              cursor={cursor}
+              isPlaying={isPlaying}
+              totalDuration={totalDuration}
+              bars={project.bars}
+              currentBarIndex={currentBarIndex}
+              onSeek={handleSeek}
+            />
+            <div className="waveform-time-overlay">
+              {timeEditValue !== null ? (
+                <input
+                  autoFocus
+                  className="nav-time-edit"
+                  value={timeEditValue}
+                  onChange={(e) => setTimeEditValue(e.target.value)}
+                  onBlur={(e) => commitTimeEdit(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitTimeEdit((e.target as HTMLInputElement).value)
+                    if (e.key === 'Escape') setTimeEditValue(null)
+                  }}
+                />
+              ) : (
+                <span
+                  className="nav-time-display"
+                  title="Click to type a time"
+                  onClick={() => audioLoaded && setTimeEditValue(formatTime(displayPos))}
+                  style={{ cursor: audioLoaded ? 'text' : 'default' }}
+                >
+                  {formatTime(displayPos)} / {formatTime(totalDuration)}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -848,18 +814,32 @@ export default function App() {
         <div className="shell">
           <div className="section-title">
             <h2 style={{ margin: 0 }}>Bar-by-Bar Punch Recorder</h2>
-            <span className="tag">MVP</span>
           </div>
-          <div className="text-muted">{status}</div>
 
           <div className="panel">
             <div className="section-title">
               <h3>Import Beat</h3>
-              <span className="tag">WAV / MP3</span>
+              <button
+                className="bwe-help"
+                type="button"
+                aria-label="Explain Import Beat controls"
+                title="Explain Import Beat controls"
+                onClick={() => setShowImportHelp((visible) => !visible)}
+              >
+                ?
+              </button>
             </div>
+            {showImportHelp && (
+              <div className="bwe-help-text">
+                <strong>File:</strong> upload a WAV or MP3 under 10 minutes long.<br />
+                <strong>BPM:</strong> becomes available after the audio loads. Auto-detect bars estimates it automatically, or you can type an exact value, then use ÷2 / ×2 to correct octave errors.<br />
+                <strong>Offset:</strong> sets where Bar 1 begins, in seconds from the start of the file.<br />
+                <strong>Set Bar 1 here:</strong> sets the offset to the current play position instead of typing a number.
+              </div>
+            )}
             <div className="controls">
               <input type="file" accept="audio/wav,audio/mp3,audio/mpeg" onChange={(e) => handleFile(e.target.files?.[0])} />
-              <span className="text-muted">{detectBusy ? 'Detecting BPM\u2026' : 'Choose BPM and Bar 1, then create the grid when ready.'}</span>
+              {detectBusy && <span className="text-muted">Detecting BPM\u2026</span>}
               <button
                 className="detect-bars-button"
                 onClick={handleAutoDetectBars}
@@ -891,7 +871,6 @@ export default function App() {
                   style={{ width: 90 }}
                   onChange={(e) => applyOffset(Number(e.target.value) || 0)}
                 />
-                <span className="text-muted" style={{ fontSize: 11 }}>s</span>
               </label>
               <button
                 title="Set Bar 1 to the current audio position"
@@ -902,9 +881,26 @@ export default function App() {
                   setStatus(`Bar 1 set to ${position.toFixed(3)}s. Click Auto-detect bars when ready.`)
                 }}
               >
-                Set Bar 1 here
+                Set Bar 1
               </button>
             </div>
+          </div>
+
+          <div className="playback-controls-panel">
+            <div className="playback-play-group">
+              <button className="playback-back-button" onClick={() => handleSeek(0)} disabled={!audioLoaded || isRecording} title="Back to start (00:00)">⏮</button>
+              <button className="playback-wide-button" onClick={isPlaying ? handlePause : handlePlay} disabled={!audioLoaded} title={isPlaying ? 'Pause — keeps position [Space]' : 'Play from current position [Space]'}>
+                {isPlaying ? '⏸ Pause' : '▶ Play'}
+              </button>
+            </div>
+            <button
+              className={loopEnabled ? 'playback-wide-button loop-toggle-on' : 'secondary playback-wide-button'}
+              onClick={() => setLoopEnabled(!loopEnabled)}
+              disabled={!audioLoaded}
+              title={loopEnabled ? 'Loop is on — click to turn off' : 'Loop is off — click to turn on'}
+            >
+              {loopRange ? `\u21bb Bar ${loopRange.start + 1}-${loopRange.end + 1}` : '\u21bb Loop'}
+            </button>
           </div>
 
           <BarList
@@ -912,7 +908,6 @@ export default function App() {
             audioBuffer={audioEngine.beatAudioBuffer}
             playhead={displayPos}
             loopRange={loopRange}
-            loopEnabled={loopEnabled}
             currentBarIndex={currentBarIndex}
             isRecording={isRecording}
             takes={project.takes}
@@ -945,42 +940,6 @@ export default function App() {
             onFocusBar={setCurrentBar}
             onEdgeChange={handleBarUpdate}
             onLoopChange={handleLoopChange}
-            onLoopEnabledChange={setLoopEnabled}
-          />
-
-          <Transport
-              isPlaying={isPlaying}
-              currentTime={displayPos}
-              durationSec={project.beat.durationSec}
-              bpm={project.beat.bpm}
-              onBpmChange={(bpm) => {
-                setBeatMeta({ ...project.beat, bpm })
-                if (project.beat.durationSec && project.bars.length) {
-                  setBars(generateBars(project.beat.durationSec, bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, project.beat.offsetSec ?? 0))
-                }
-              }}
-              onPlay={handlePlay}
-              onPause={handlePause}
-              onStop={handleStop}
-              countInBars={countInBars}
-              preRollMs={preRollMs}
-              setCountIn={setCountIn}
-              setPreRoll={setPreRoll}
-              disabled={!audioLoaded}
-              showPlaybackControls={false}
-          />
-
-          <PunchPanel
-            mode={mode}
-            currentBarIndex={currentBarIndex}
-            barCount={barCount}
-            autoAdvance={autoAdvance}
-            loopCurrentBar={loopCurrentBar}
-            onModeChange={setMode}
-            onPrev={() => setCurrentBar(currentBarIndex - 1)}
-            onNext={() => setCurrentBar(currentBarIndex + 1)}
-            onToggleAutoAdvance={setAutoAdvance}
-            onToggleLoop={setLoop}
           />
 
           <div className="row">
