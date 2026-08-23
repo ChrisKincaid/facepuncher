@@ -30,6 +30,7 @@ export interface Take {
   fileId: string
   gain: number
   selected: boolean
+  locked?: boolean
   createdAt: string
 }
 

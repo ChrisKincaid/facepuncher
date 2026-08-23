@@ -8,7 +8,7 @@ interface Props {
   prevBarEnd: number
   nextBarStart: number
   playhead: number
-  onEdgeChange: (start: number, end: number) => void
+  onEdgeChange: (start: number, end: number, allowGaps: boolean) => void
 }
 
 const HIT = 16   // px hit-test tolerance for drag handles
@@ -32,16 +32,24 @@ export function BarWaveformEditor(props: Props) {
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [nudgeMode, setNudgeMode]   = useState<NudgeMode>('zero-crossing')
+  const [maintainLength, setMaintainLength] = useState(true)
+  const [allowGaps, setAllowGaps] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [zoomLevel, setZoomLevel]   = useState(1)
   const [viewCenter, setViewCenter] = useState<number | null>(null)
   const [zoomTarget, setZoomTarget] = useState<'start' | 'end'>('start')
   const zoomTargetRef = useRef<'start' | 'end'>('start')
   const zoomDragRef = useRef<{ startY: number; startZoom: number } | null>(null)
+  const dragLengthRef = useRef(props.barEndSec - props.barStartSec)
+  const maintainLengthRef = useRef(true)
+  const allowGapsRef = useRef(false)
 
   useEffect(() => {
     propsRef.current = props
     zoomTargetRef.current = zoomTarget
-  }, [props, zoomTarget])
+    maintainLengthRef.current = maintainLength
+    allowGapsRef.current = allowGaps
+  }, [allowGaps, maintainLength, props, zoomTarget])
 
   // ── view window (affected by zoom) ─────────────────────────────────────
   function computeViewWindow(zoom: number): { start: number; end: number } {
@@ -74,14 +82,32 @@ export function BarWaveformEditor(props: Props) {
     } else {
       t = current + direction * nudgeMode / 1000
     }
-    if (handle === 'start') {
+    if (maintainLengthRef.current) {
+      const length = stateRef.current.handles.end - stateRef.current.handles.start
+      if (handle === 'start') {
+        const maxStart = allowGapsRef.current
+          ? Math.max(prevBarEnd, propsRef.current.nextBarStart - length)
+          : propsRef.current.audioBuffer.duration - length
+        const start = Math.max(prevBarEnd, Math.min(t, maxStart))
+        stateRef.current.handles.start = start
+        stateRef.current.handles.end = start + length
+      } else {
+        const minEnd = allowGapsRef.current ? prevBarEnd + length : length
+        const maxEnd = allowGapsRef.current
+          ? Math.min(propsRef.current.nextBarStart, propsRef.current.audioBuffer.duration)
+          : propsRef.current.audioBuffer.duration
+        const end = Math.max(minEnd, Math.min(t, maxEnd))
+        stateRef.current.handles.end = end
+        stateRef.current.handles.start = end - length
+      }
+    } else if (handle === 'start') {
       t = Math.max(prevBarEnd, Math.min(t, stateRef.current.handles.end - 0.02))
     } else {
       t = Math.max(stateRef.current.handles.start + 0.02, Math.min(t, stateRef.current.view.end))
     }
-    stateRef.current.handles[handle] = t
+    if (!maintainLengthRef.current) stateRef.current.handles[handle] = t
     drawRef.current()
-    propsRef.current.onEdgeChange(stateRef.current.handles.start, stateRef.current.handles.end)
+    propsRef.current.onEdgeChange(stateRef.current.handles.start, stateRef.current.handles.end, allowGapsRef.current)
   }
 
   // Sync view + handles from props whenever NOT dragging (runs every render)
@@ -258,11 +284,26 @@ export function BarWaveformEditor(props: Props) {
       const x = clientToCanvasX(e.clientX)
       const t = xToTime(x, canvas.width)
       const { prevBarEnd } = propsRef.current
-      if (dragging.current === 'start') {
-        stateRef.current.handles.start = Math.max(
-          prevBarEnd,
-          Math.min(t, stateRef.current.handles.end - 0.02),
-        )
+      if (maintainLengthRef.current) {
+        const length = dragLengthRef.current
+        if (dragging.current === 'start') {
+          const maxStart = allowGapsRef.current
+            ? Math.max(prevBarEnd, propsRef.current.nextBarStart - length)
+            : propsRef.current.audioBuffer.duration - length
+          const start = Math.max(prevBarEnd, Math.min(t, maxStart))
+          stateRef.current.handles.start = start
+          stateRef.current.handles.end = start + length
+        } else {
+          const minEnd = allowGapsRef.current ? prevBarEnd + length : length
+          const maxEnd = allowGapsRef.current
+            ? Math.min(propsRef.current.nextBarStart, propsRef.current.audioBuffer.duration)
+            : propsRef.current.audioBuffer.duration
+          const end = Math.max(minEnd, Math.min(t, maxEnd))
+          stateRef.current.handles.end = end
+          stateRef.current.handles.start = end - length
+        }
+      } else if (dragging.current === 'start') {
+        stateRef.current.handles.start = Math.max(prevBarEnd, Math.min(t, stateRef.current.handles.end - 0.02))
       } else {
         // End handle: clamp only to view window, not nextBarStart.
         // updateBarPosition handles neighbor continuity on commit.
@@ -280,6 +321,7 @@ export function BarWaveformEditor(props: Props) {
       propsRef.current.onEdgeChange(
         stateRef.current.handles.start,
         stateRef.current.handles.end,
+        allowGapsRef.current,
       )
       dragging.current = null
       if (canvasRef.current) canvasRef.current.style.cursor = 'default'
@@ -303,6 +345,7 @@ export function BarWaveformEditor(props: Props) {
     if (hit) {
       setZoomTarget(hit)
       zoomTargetRef.current = hit
+      dragLengthRef.current = stateRef.current.handles.end - stateRef.current.handles.start
       dragging.current = hit
       canvas.style.cursor = 'ew-resize'
     }
@@ -324,6 +367,10 @@ export function BarWaveformEditor(props: Props) {
     if (hit) {
       setZoomTarget(hit)
       zoomTargetRef.current = hit
+      dragLengthRef.current = stateRef.current.handles.end - stateRef.current.handles.start
+      dragging.current = hit
+      canvas.setPointerCapture(e.pointerId)
+      canvas.style.cursor = 'ew-resize'
       return
     }
     e.preventDefault()
@@ -390,7 +437,38 @@ export function BarWaveformEditor(props: Props) {
               <option value="zero-crossing">Zero crossing</option>
             </select>
           </label>
+          <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={maintainLength}
+              onChange={(e) => { e.stopPropagation(); setMaintainLength(e.target.checked) }}
+            />
+            Maintain bar length
+          </label>
+          <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={allowGaps}
+              onChange={(e) => { e.stopPropagation(); setAllowGaps(e.target.checked) }}
+            />
+            Allow gaps
+          </label>
+          <button
+            className="bwe-help"
+            type="button"
+            aria-label="Explain bar boundary options"
+            title="Explain bar boundary options"
+            onClick={(e) => { e.stopPropagation(); setShowHelp((visible) => !visible) }}
+          >
+            ?
+          </button>
         </div>
+        {showHelp && (
+          <div className="bwe-help-text">
+            <strong>Maintain bar length:</strong> moving one boundary moves the other so this bar keeps its duration.<br />
+            <strong>Allow gaps:</strong> lets this bar stop before the next bar or start after the previous bar. Gaps can cause missing recording or playback time and other unwanted behavior. Overlapping bars are never allowed because they would make playback and recording ownership ambiguous.
+          </div>
+        )}
 
         {/* ── zoom row ── */}
         <div className="bwe-ctrl-row">

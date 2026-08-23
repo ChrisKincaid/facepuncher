@@ -15,6 +15,7 @@ export interface RenderRequest {
   mix: MixSettings
   vocalsOnly?: boolean
   sampleRate?: number
+  vocalSyncMs?: number
 }
 
 export async function renderOffline(req: RenderRequest) {
@@ -39,7 +40,7 @@ export async function renderOffline(req: RenderRequest) {
     const perBar = take.barIndex !== undefined ? req.mix.barGains?.[take.barIndex] ?? 1 : 1
     takeGain.gain.value = take.gain * (req.mix.globalVocalGain ?? 1) * perBar
     src.connect(takeGain).connect(ctx.destination)
-    src.start(take.startSec)
+    src.start(Math.max(0, take.startSec + (req.vocalSyncMs ?? 0) / 1000))
   })
 
   const rendered = await ctx.startRendering()

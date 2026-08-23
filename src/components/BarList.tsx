@@ -2,8 +2,7 @@ import { useState } from 'react'
 import { formatTime } from '../utils/time'
 import type { Bar, Take } from '../data/models'
 import { BarWaveformEditor } from './BarWaveformEditor'
-
-const sectionOptions = ['Intro', 'Verse 1', 'Verse 2', 'Chorus 1', 'Chorus 2', 'Bridge', 'Outro', 'Hook', 'Break', 'Custom']
+import { TakeSlots } from './TakeSlots'
 
 interface Props {
   bars: Bar[]
@@ -12,15 +11,22 @@ interface Props {
   loopRange?: { start: number; end: number }
   loopEnabled: boolean
   currentBarIndex: number
+  isRecording: boolean
   takes: Take[]
+  armedTakeByBar: Record<number, number[]>
   activeBarPlayback?: { barIndex: number; mode: 'play' | 'loop' }
   onPlayFromBar: (barIndex: number) => void
   onLoopBar: (barIndex: number) => void
   onStopBar: () => void
-  onRecordBar: (barIndex: number) => void
+  onArmTake: (barIndex: number, slot: number) => void
+  onDisarmTake: (barIndex: number, slot?: number) => void
+  onSelectTake: (barIndex: number, takeId: string) => void
+  onListenTake: (barIndex: number, takeId: string) => void
+  onSelectNoTake: (barIndex: number) => void
+  onDeleteTake: (takeId: string) => void
+  onToggleTakeLock: (takeId: string) => void
   onFocusBar: (barIndex: number) => void
-  onSectionChange: (barIndex: number, section: string) => void
-  onEdgeChange: (barIndex: number, startSec: number, endSec: number) => void
+  onEdgeChange: (barIndex: number, startSec: number, endSec: number, allowGaps: boolean) => void
   onLoopChange: (start: number, end: number) => void
   onLoopEnabledChange: (enabled: boolean) => void
 }
@@ -32,14 +38,21 @@ export function BarList({
   loopRange,
   loopEnabled,
   currentBarIndex,
+  isRecording,
   takes,
+  armedTakeByBar,
   activeBarPlayback,
   onPlayFromBar,
   onLoopBar,
   onStopBar,
-  onRecordBar,
+  onArmTake,
+  onDisarmTake,
+  onSelectTake,
+  onListenTake,
+  onSelectNoTake,
+  onDeleteTake,
+  onToggleTakeLock,
   onFocusBar,
-  onSectionChange,
   onEdgeChange,
   onLoopChange,
   onLoopEnabledChange,
@@ -70,10 +83,8 @@ export function BarList({
       <div className="bar-list">
         {bars.map((bar) => {
           const active = playhead >= bar.startSec && playhead < bar.endSec
-          const focused = bar.index === currentBarIndex
           const inLoop = loopRange && bar.index >= loopRange.start && bar.index <= loopRange.end
           const barTakes = takes.filter((t) => t.barIndex === bar.index)
-          const selectedTake = barTakes.find((t) => t.selected)
           const activePlayback = activeBarPlayback?.barIndex === bar.index ? activeBarPlayback.mode : null
           const isLoopStart = loopRange?.start === bar.index
           const isLoopEnd = loopRange?.end === bar.index
@@ -86,24 +97,23 @@ export function BarList({
               <div className="bar-meta">
                 <div className="bar-num">Bar {bar.index + 1}</div>
                 <div className="bar-times">{formatTime(bar.startSec)} – {formatTime(bar.endSec)}</div>
-                {focused && <span className="tag">Focused</span>}
-                {active && <span className="tag" style={{ background: 'rgba(77,208,225,0.16)', borderColor: 'rgba(77,208,225,0.4)', color: '#4dd0e1' }}>Playing</span>}
+                <div
+                  className={`bar-status-strip ${active ? 'bar-status-playing' : ''} ${isRecording && active && bar.index === currentBarIndex ? 'bar-status-recording' : ''}`}
+                  aria-label={isRecording && active && bar.index === currentBarIndex ? 'Recording' : active ? 'Playing' : 'Bar inactive'}
+                />
               </div>
               <div className="bar-wave-thumb">
-                <div className="bar-wave-fill" />
-              </div>
-              <div className="bar-section">
-                <select
-                  value={bar.section || ''}
-                  onChange={(e) => onSectionChange(bar.index, e.target.value)}
-                >
-                  <option value="">Label…</option>
-                  {sectionOptions.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
+                <TakeSlots
+                  takes={barTakes}
+                  armedSlots={armedTakeByBar[bar.index] ?? []}
+                  onArm={(slot) => onArmTake(bar.index, slot)}
+                  onDisarm={(slot) => onDisarmTake(bar.index, slot)}
+                  onSelect={(takeId) => onSelectTake(bar.index, takeId)}
+                  onListen={(takeId) => onListenTake(bar.index, takeId)}
+                  onSelectNone={() => onSelectNoTake(bar.index)}
+                  onDelete={onDeleteTake}
+                  onToggleLock={onToggleTakeLock}
+                />
               </div>
               <div className="bar-edges">
                 {editingBar === bar.index ? (
@@ -116,7 +126,7 @@ export function BarList({
                         prevBarEnd={bars[bar.index - 1]?.endSec ?? 0}
                         nextBarStart={bars[bar.index + 1]?.startSec ?? bar.endSec + 4}
                         playhead={playhead}
-                        onEdgeChange={(s: number, e: number) => onEdgeChange(bar.index, s, e)}
+                        onEdgeChange={(s: number, e: number, gaps: boolean) => onEdgeChange(bar.index, s, e, gaps)}
                       />
                     ) : (
                       <span className="text-muted" style={{ fontSize: 12 }}>Load a beat first to edit edges.</span>
@@ -144,24 +154,19 @@ export function BarList({
                 }}>
                   {activePlayback === 'loop' ? 'Stop' : 'Loop'}
                 </button>
-                <button className={`secondary bar-loop-button ${isLoopStart ? 'bar-loop-marker' : ''}`} onClick={(e) => {
-                  e.stopPropagation()
-                  onLoopChange(bar.index, endSel)
-                }}>
-                  {isLoopStart ? 'Start set' : 'Set start'}
-                </button>
-                <button className={`secondary bar-loop-button ${isLoopEnd ? 'bar-loop-marker' : ''}`} onClick={(e) => {
-                  e.stopPropagation()
-                  onLoopChange(startSel, bar.index)
-                }}>
-                  {isLoopEnd ? 'End set' : 'Set end'}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); onRecordBar(bar.index) }}>
-                  Rec
-                </button>
-                <div className="bar-takes">
-                  <span className="text-muted">Takes: {barTakes.length}</span>
-                  {selectedTake && <span className="tag">Active</span>}
+                <div className="bar-loop-actions">
+                  <button className={`secondary bar-loop-button ${isLoopStart ? 'bar-loop-marker' : ''}`} onClick={(e) => {
+                    e.stopPropagation()
+                    onLoopChange(bar.index, endSel)
+                  }}>
+                    {isLoopStart ? 'Start set' : 'Set start'}
+                  </button>
+                  <button className={`secondary bar-loop-button ${isLoopEnd ? 'bar-loop-marker' : ''}`} onClick={(e) => {
+                    e.stopPropagation()
+                    onLoopChange(startSel, bar.index)
+                  }}>
+                    {isLoopEnd ? 'End set' : 'Set end'}
+                  </button>
                 </div>
               </div>
             </div>

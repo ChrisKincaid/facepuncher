@@ -6,13 +6,11 @@ interface Props {
   barCount: number
   autoAdvance: boolean
   loopCurrentBar: boolean
-  isRecording: boolean
   onModeChange: (mode: PunchMode) => void
   onPrev: () => void
   onNext: () => void
   onToggleAutoAdvance: (enabled: boolean) => void
   onToggleLoop: (enabled: boolean) => void
-  onRecord: () => void
 }
 
 export function PunchPanel({
@@ -21,13 +19,11 @@ export function PunchPanel({
   barCount,
   autoAdvance,
   loopCurrentBar,
-  isRecording,
   onModeChange,
   onPrev,
   onNext,
   onToggleAutoAdvance,
   onToggleLoop,
-  onRecord,
 }: Props) {
   return (
     <div className="panel">
@@ -61,7 +57,6 @@ export function PunchPanel({
           <input type="checkbox" checked={loopCurrentBar} onChange={(e) => onToggleLoop(e.target.checked)} />
           Loop current bar
         </label>
-        <button onClick={onRecord}>{isRecording ? 'Stop' : 'Record (R)'}</button>
       </div>
     </div>
   )

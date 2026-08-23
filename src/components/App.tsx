@@ -2,20 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Transport } from './Transport'
 import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { PunchPanel } from './PunchPanel'
-import { TakesPanel } from './TakesPanel'
 import { Mixer } from './Mixer'
 import { ExportDialog } from './ExportDialog'
 import { BarList } from './BarList'
+import { CalibrationDialog } from './CalibrationDialog'
 import { useStore } from '../state/store'
 import { generateBars, updateBarPosition } from '../analysis/bpmGrid'
 import { estimateBpmFromBuffer } from '../analysis/onsetEstimate'
-import { barDurationSec, formatTime } from '../utils/time'
+import { formatTime } from '../utils/time'
 import { audioEngine } from '../audio/audioEngine'
 import { renderOffline } from '../audio/offlineRender'
 import { encodeWavFromAudioBuffer } from '../audio/wav'
 import { getBlob, listProjects, putBlob, saveProject } from '../data/storage'
+import type { Take } from '../data/models'
 
 const DEFAULT_LOOP_END_INDEX = 15
+const CALIBRATION_STORAGE_KEY = 'punchin-audio-calibration-v2'
 
 export default function App() {
   const {
@@ -27,6 +29,7 @@ export default function App() {
     countInBars,
     preRollMs,
     isRecording,
+    armedTakeByBar,
     audioUrl,
     setBeatMeta,
     setBars,
@@ -40,9 +43,14 @@ export default function App() {
     setPreRoll,
     setRecording,
     setLatencyOffset,
-    addTake,
+    armTake,
+    disarmTake,
+    consumeArmedTake,
+    saveTake,
     selectTake,
+    clearTakeSelection,
     deleteTake,
+    toggleTakeLock,
     updateMix,
     setProject,
   } = useStore()
@@ -55,8 +63,20 @@ export default function App() {
   const recordTimer = useRef<number | null>(null)
   const startTimer = useRef<number | null>(null)
   const blobCache = useRef<Map<string, Blob>>(new Map())
+  const decodedTakeCache = useRef<Map<string, AudioBuffer>>(new Map())
   const [isPlaying, setIsPlaying] = useState(false)
   const isPlayingRef = useRef(false)
+  const recordingActiveRef = useRef(false)
+  const recordingPendingRef = useRef(false)
+  const recordingTargetRef = useRef<{ barIndex: number; slot: number } | null>(null)
+  const lastPlayingBarRef = useRef<number | null>(null)
+  const previousAudioTimeRef = useRef<number | null>(null)
+  const takePlaybackRequestRef = useRef(0)
+  const lastTakeBarRef = useRef<number | null>(null)
+  const directTakeScheduledBarRef = useRef<number | null>(null)
+  const activeLoopingTakeBarRef = useRef<number | null>(null)
+  const syncGenerationRef = useRef(0)
+  const vocalSyncMsRef = useRef(project.latencyOffsetMs)
   const playheadRef = useRef(0)
   const cursorRef = useRef(0)
   const [monitorEnabled, setMonitorEnabled] = useState(false)
@@ -66,6 +86,12 @@ export default function App() {
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [waveformResetKey, setWaveformResetKey] = useState(0)
   const [activeBarPlayback, setActiveBarPlayback] = useState<{ barIndex: number; mode: 'play' | 'loop' } | undefined>(undefined)
+    const [calibrationOpen, setCalibrationOpen] = useState(false)
+    const [calibrationBusy, setCalibrationBusy] = useState(false)
+    const [calibrationError, setCalibrationError] = useState<string | undefined>()
+    const [calibrationManual, setCalibrationManual] = useState(false)
+    const [calibrationHits, setCalibrationHits] = useState(0)
+    const [calibrationLevel, setCalibrationLevel] = useState(0)
   const manualOffsetRef = useRef(false)
 
   const currentBar = project.bars[currentBarIndex]
@@ -77,8 +103,44 @@ export default function App() {
   const audioLoaded = useMemo(() => Boolean(audioUrl && totalDuration > 0), [audioUrl, totalDuration])
 
   useEffect(() => {
+    vocalSyncMsRef.current = project.latencyOffsetMs
+  }, [project.latencyOffsetMs])
+
+  const runCalibration = async (manualClap: boolean) => {
+    setCalibrationBusy(true)
+    setCalibrationError(undefined)
+    setCalibrationManual(manualClap)
+    setCalibrationHits(0)
+    const meter = window.setInterval(() => setCalibrationLevel(audioEngine.microphoneLevel), 80)
+    try {
+      const correction = await audioEngine.calibrateMicrophone(manualClap, setCalibrationHits)
+      setLatencyOffset(correction)
+      localStorage.setItem(CALIBRATION_STORAGE_KEY, 'true')
+      setCalibrationOpen(false)
+      setStatus(`Audio setup complete. Timing correction applied.`)
+    } catch (err) {
+      console.error('calibration failed', err)
+      setCalibrationError('Calibration could not detect enough clear hits. Try again in a quiet room.')
+    } finally {
+      window.clearInterval(meter)
+      setCalibrationLevel(0)
+      setCalibrationBusy(false)
+    }
+  }
+
+  useEffect(() => {
     saveProject(project).catch((err) => console.error('autosave failed', err))
   }, [project])
+
+  useEffect(() => {
+    console.log('[Punchin] recording diagnostics loaded')
+    void audioEngine.prepareMicrophone()
+      .then(() => setStatus('Microphone ready. Load audio to begin.'))
+      .catch((err) => {
+        console.error('microphone access on load failed', err)
+        setStatus('Microphone unavailable. Check browser permissions before recording.')
+      })
+  }, [])
 
   // Drive the visible cursor from the same AudioContext clock used by the
   // playing source. A frame loop avoids the visual position lagging behind the
@@ -88,7 +150,36 @@ export default function App() {
     const updateCursor = () => {
       if (!isPlayingRef.current) return
       const raw = audioEngine.currentTime
-      if (loopRange && project.bars[loopRange.start] && project.bars[loopRange.end]) {
+      const currentBarIndex = project.bars.findIndex((bar) => raw >= bar.startSec && raw < bar.endSec)
+      const wrapped = previousAudioTimeRef.current !== null && raw < previousAudioTimeRef.current - 0.05
+      const enteredBar = currentBarIndex >= 0 && (currentBarIndex !== lastPlayingBarRef.current || wrapped)
+      previousAudioTimeRef.current = raw
+      if (enteredBar) {
+        lastPlayingBarRef.current = currentBarIndex
+        const armed = armedTakeByBar[currentBarIndex]?.length ?? 0
+        console.log('%c[ENTER BAR]', 'color:#fff;background:#333;padding:2px 6px', {
+          ctxTime: raw.toFixed(3),
+          barIndex: currentBarIndex,
+          wrapped,
+          armedSlots: armed,
+          recordingActive: recordingActiveRef.current,
+          recordingPending: recordingPendingRef.current,
+          action: armed && !recordingActiveRef.current && !recordingPendingRef.current ? 'BEGIN-RECORD'
+            : armed && (recordingActiveRef.current || recordingPendingRef.current) ? 'WAIT-RECORDING'
+            : !recordingActiveRef.current && !recordingPendingRef.current ? 'PLAY-TAKE'
+            : 'none',
+        })
+        if (armedTakeByBar[currentBarIndex]?.length && !recordingActiveRef.current && !recordingPendingRef.current) {
+          recordingPendingRef.current = true
+          void beginAutomaticRecording(currentBarIndex)
+        } else if (!recordingActiveRef.current && !recordingPendingRef.current) {
+          // Non-armed bar: restart its selected take from the very beginning on every
+          // entry, including loop wraps. One source, constant gain, no offset — so each
+          // loop pass plays the whole take from "1" instead of only the tail.
+          void playSelectedTakeFromStart(currentBarIndex)
+        }
+      }
+      if (loopEnabled && loopRange && project.bars[loopRange.start] && project.bars[loopRange.end]) {
         const loopStart = project.bars[loopRange.start].startSec
         const loopEnd = project.bars[loopRange.end].endSec
         const span = Math.max(loopEnd - loopStart, 0.0001)
@@ -103,9 +194,12 @@ export default function App() {
     }
     frame = window.requestAnimationFrame(updateCursor)
     return () => window.cancelAnimationFrame(frame)
-  }, [isPlaying, loopRange, project.bars])
+  }, [armedTakeByBar, isPlaying, loopEnabled, loopRange, project.bars, project.latencyOffsetMs, project.takes])
 
   useEffect(() => {
+    if (!loopEnabled || !loopRange || loopRange.start !== loopRange.end || activeLoopingTakeBarRef.current !== loopRange.start) {
+      activeLoopingTakeBarRef.current = null
+    }
     if (loopEnabled && loopRange && project.bars[loopRange.start] && project.bars[loopRange.end]) {
       audioEngine.setLoop(project.bars[loopRange.start].startSec, project.bars[loopRange.end].endSec)
       return
@@ -202,8 +296,8 @@ export default function App() {
   }
 
   const handleBarUpdate = useCallback(
-    (index: number, start: number, end: number) => {
-      setBars(updateBarPosition(project.bars, index, start, end))
+    (index: number, start: number, end: number, allowGaps: boolean) => {
+      setBars(updateBarPosition(project.bars, index, start, end, allowGaps))
     },
     [project.bars, setBars],
   )
@@ -239,6 +333,7 @@ export default function App() {
 
   const handlePlay = useCallback(() => {
     if (!audioLoaded) return
+    console.log('[Punchin] top-level Play clicked', { contextState: audioEngine.contextState, position: playhead, isPlaying: isPlayingRef.current })
     const selectedLoop = loopEnabled && loopRange
       ? { start: project.bars[loopRange.start], end: project.bars[loopRange.end] }
       : undefined
@@ -270,13 +365,19 @@ export default function App() {
   const handleStop = useCallback(() => {
     if (!audioLoaded) return
     clearTimers()
+    directTakeScheduledBarRef.current = null
+    activeLoopingTakeBarRef.current = null
     isPlayingRef.current = false
     audioEngine.stop()
     audioEngine.seek(0)
-    setRecording(false)
+    if (recordingActiveRef.current) void stopRecordingFlow()
+    else setRecording(false)
     setIsPlaying(false)
     setPlayhead(0)
     setCursor(0)
+    recordingPendingRef.current = false
+    lastPlayingBarRef.current = null
+    previousAudioTimeRef.current = null
     setWaveformResetKey((key) => key + 1)
     setActiveBarPlayback(undefined)
   }, [audioLoaded])
@@ -301,18 +402,22 @@ export default function App() {
     if (!audioLoaded) return
     const bar = project.bars[barIndex]
     if (!bar) return
+      console.log('[Punchin] bar Play clicked', { barIndex, armedSlots: armedTakeByBar[barIndex] ?? [] })
+      setStatus(armedTakeByBar[barIndex]?.length ? `Preparing recording for Bar ${barIndex + 1}...` : `Playing Bar ${barIndex + 1}.`)
     setCurrentBar(barIndex)
     setActiveBarPlayback({ barIndex, mode: 'play' })
     setLoopEnabled(false)
     audioEngine.setLoop(undefined, undefined)
     setPlayhead(bar.startSec)
     setCursor(bar.startSec)
-    audioEngine.play(bar.startSec)
+    void startBarPlayback(barIndex, false)
     setIsPlaying(true)
     isPlayingRef.current = true
   }
 
   const handleLoopBar = (barIndex: number) => {
+      console.log('[Punchin] bar Loop clicked', { barIndex, armedSlots: armedTakeByBar[barIndex] ?? [] })
+      setStatus(armedTakeByBar[barIndex]?.length ? `Preparing loop recording for Bar ${barIndex + 1}...` : `Looping Bar ${barIndex + 1}.`)
     if (!audioLoaded) return
     const bar = project.bars[barIndex]
     if (!bar) return
@@ -323,66 +428,260 @@ export default function App() {
     audioEngine.setLoop(bar.startSec, bar.endSec)
     setPlayhead(bar.startSec)
     setCursor(bar.startSec)
-    audioEngine.play(bar.startSec)
+    void startBarPlayback(barIndex, true)
     setIsPlaying(true)
     isPlayingRef.current = true
   }
 
-  const handleRecordFromBar = (barIndex: number) => {
+  const startBarPlayback = async (barIndex: number, loop: boolean) => {
     const bar = project.bars[barIndex]
-    if (!bar) return
-    setCurrentBar(barIndex)
-    void handleRecord()
+    if (!bar || !audioLoaded) return
+    const armedSlot = armedTakeByBar[barIndex]?.[0]
+    try {
+      if (armedSlot !== undefined) recordingPendingRef.current = true
+      if (armedSlot !== undefined) await audioEngine.prepareMicrophone()
+      if (armedSlot === undefined) {
+        audioEngine.play(bar.startSec)
+        void playSelectedTake(barIndex)
+        return
+      }
+      await beginAutomaticRecording(barIndex)
+      audioEngine.play(bar.startSec)
+      if (loop) setStatus(`Recording Take ${armedSlot + 1} for Bar ${barIndex + 1}. Loop once to create another take.`)
+    } catch (err) {
+      console.error('bar playback recording failed', err)
+      audioEngine.stop()
+      recordingTargetRef.current = null
+      recordingPendingRef.current = false
+      recordingActiveRef.current = false
+      setIsPlaying(false)
+      isPlayingRef.current = false
+      setStatus('Could not start bar recording. Check microphone permissions and input device.')
+    }
+  }
+
+  async function beginAutomaticRecording(barIndex: number) {
+    const bar = project.bars[barIndex]
+    const armedSlot = armedTakeByBar[barIndex]?.[0]
+    if (!bar || armedSlot === undefined || recordingActiveRef.current) {
+      recordingPendingRef.current = false
+      return
+    }
+    try {
+      recordingTargetRef.current = { barIndex, slot: armedSlot }
+      const duration = Math.max(0.01, bar.endSec - bar.startSec)
+      console.log('%c[FLOW] beginAutomaticRecording', 'color:#fff;background:#a60;padding:2px 6px', {
+        barIndex, armedSlot, barStartSec: bar.startSec.toFixed(3), barEndSec: bar.endSec.toFixed(3),
+        durationSec: duration.toFixed(3), playbackPos: audioEngine.currentTime.toFixed(3),
+      })
+      await audioEngine.startRecording(project.latencyOffsetMs, bar.startSec)
+      recordingActiveRef.current = true
+      recordingPendingRef.current = false
+      setRecording(true)
+      setStatus(`Recording Take ${armedSlot + 1} for Bar ${barIndex + 1}.`)
+      recordTimer.current = window.setTimeout(() => {
+        console.log('%c[FLOW] recordTimer fired → stopRecordingFlow', 'color:#a60', { barIndex, afterMs: Math.round(duration * 1000) })
+        void stopRecordingFlow()
+      }, duration * 1000)
+    } catch (err) {
+      console.error('automatic recording failed', err)
+      recordingPendingRef.current = false
+      recordingTargetRef.current = null
+      audioEngine.stop()
+      setIsPlaying(false)
+      isPlayingRef.current = false
+      setStatus('Automatic recording could not start. Check microphone permissions and input device.')
+    }
+  }
+
+  async function playSelectedTakeFromStart(barIndex: number) {
+    const take = project.takes.find((item) => item.barIndex === barIndex && item.selected)
+    if (!take) {
+      console.log('%c[PLAY] no selected take', 'color:#888', { barIndex })
+      audioEngine.stopTake()
+      return
+    }
+    const perBar = project.mix.barGains?.[barIndex] ?? 1
+    const gainValue = take.gain * project.mix.globalVocalGain * perBar
+    const syncSec = vocalSyncMsRef.current / 1000
+    const offsetSec = Math.max(0, -syncSec)
+    const delaySec = Math.max(0, syncSec)
+    const cached = decodedTakeCache.current.get(take.takeId)
+    if (cached) {
+      logBufferRegions('PLAY from-cache', barIndex, take.takeId, cached)
+      audioEngine.playTake(cached, offsetSec, gainValue, delaySec)
+      return
+    }
+    const blob = blobCache.current.get(take.fileId)
+    if (!blob) return
+    try {
+      const ctx = await audioEngine.ensureContext()
+      const buffer = await ctx.decodeAudioData(await blob.arrayBuffer())
+      decodedTakeCache.current.set(take.takeId, buffer)
+      if (!isPlayingRef.current || recordingActiveRef.current) return
+      logBufferRegions('PLAY from-decode', barIndex, take.takeId, buffer)
+      audioEngine.playTake(buffer, offsetSec, gainValue, delaySec)
+    } catch (err) {
+      console.error('take playback failed', err)
+    }
+  }
+
+  function logBufferRegions(tag: string, barIndex: number, takeId: string, buffer: AudioBuffer) {
+    const data = buffer.getChannelData(0)
+    const segs = 8
+    const rms: string[] = []
+    let peak = 0
+    for (let s = 0; s < segs; s++) {
+      const from = Math.floor((data.length * s) / segs)
+      const to = Math.floor((data.length * (s + 1)) / segs)
+      let sum = 0
+      for (let i = from; i < to; i++) { const v = data[i]; sum += v * v; const a = Math.abs(v); if (a > peak) peak = a }
+      rms.push(Math.sqrt(sum / Math.max(1, to - from)).toFixed(3))
+    }
+    console.log('%c[PLAY] ' + tag, 'color:#fff;background:#036;padding:2px 6px', {
+      barIndex,
+      takeId,
+      durationSec: buffer.duration.toFixed(3),
+      peak: peak.toFixed(3),
+      rms8: rms.join(' | '),
+    })
+  }
+
+  async function playSelectedTake(barIndex: number, offsetSec = 0, syncSec = project.latencyOffsetMs / 1000, currentPositionSec?: number, takeOverride?: Take) {
+    const take = takeOverride ?? project.takes.find((item) => item.barIndex === barIndex && item.selected)
+    if (!take) {
+      console.log('[Punchin] no selected take for bar playback', { barIndex })
+      audioEngine.stopTake()
+      return
+    }
+    const blob = blobCache.current.get(take.fileId)
+    if (!blob) {
+      console.warn('[Punchin] selected take blob is missing', { barIndex, takeId: take.takeId, fileId: take.fileId })
+      return
+    }
+    const request = ++takePlaybackRequestRef.current
+    const syncGeneration = syncGenerationRef.current
+    try {
+      const ctx = await audioEngine.ensureContext()
+      const buffer = await ctx.decodeAudioData(await blob.arrayBuffer())
+      decodedTakeCache.current.set(take.takeId, buffer)
+      if (request !== takePlaybackRequestRef.current || syncGeneration !== syncGenerationRef.current || !isPlayingRef.current || recordingActiveRef.current) return
+      const perBar = project.mix.barGains?.[barIndex] ?? 1
+      const bar = project.bars[barIndex]
+      const position = currentPositionSec ?? (bar?.startSec ?? 0)
+      const targetStart = (bar?.startSec ?? 0) + syncSec
+      const adjustedOffset = Math.max(0, position - targetStart + offsetSec)
+      const playbackDelay = Math.max(0, targetStart - position)
+      if (adjustedOffset >= buffer.duration) return
+      console.log('[Punchin] scheduling selected take playback', {
+        barIndex,
+        takeId: take.takeId,
+        syncSec,
+        position,
+        adjustedOffset,
+        playbackDelay,
+      })
+      audioEngine.playTake(buffer, adjustedOffset, take.gain * project.mix.globalVocalGain * perBar, playbackDelay)
+    } catch (err) {
+      console.error('selected take playback failed', err)
+    }
+  }
+
+  async function listenToTake(barIndex: number, takeId: string) {
+    const take = project.takes.find((item) => item.barIndex === barIndex && item.takeId === takeId)
+    if (!take) return
+    const blob = blobCache.current.get(take.fileId)
+    if (!blob) {
+      setStatus('This take audio is unavailable.')
+      return
+    }
+    try {
+      const ctx = await audioEngine.ensureContext()
+      const buffer = decodedTakeCache.current.get(take.takeId) ?? await ctx.decodeAudioData(await blob.arrayBuffer())
+      decodedTakeCache.current.set(take.takeId, buffer)
+      logBufferRegions('LISTEN button', barIndex, take.takeId, buffer)
+      audioEngine.playTake(buffer, 0, take.gain * project.mix.globalVocalGain * (project.mix.barGains?.[barIndex] ?? 1))
+      setStatus(`Listening to Take ${project.takes.filter((item) => item.barIndex === barIndex).findIndex((item) => item.takeId === takeId) + 1} for Bar ${barIndex + 1}.`)
+    } catch (err) {
+      console.error('direct take listen failed', err)
+      setStatus('This take could not be decoded for playback.')
+    }
+  }
+
+  const updateGlobalSync = (value: number) => {
+    const syncMs = Math.max(-10000, Math.min(10000, Math.round(value)))
+    vocalSyncMsRef.current = syncMs
+    setLatencyOffset(syncMs)
+    // Re-evaluate the current bar immediately and use the new value on the
+    // next bar entry without restarting the beat transport.
+    syncGenerationRef.current += 1
+    lastTakeBarRef.current = null
+    if (isPlayingRef.current && !recordingActiveRef.current) {
+      const raw = audioEngine.currentTime
+      const barIndex = project.bars.findIndex((bar) => raw >= bar.startSec && raw < bar.endSec)
+      if (barIndex >= 0) {
+        console.log('[Punchin] live vocal sync changed', { syncMs, barIndex, position: raw })
+        void playSelectedTake(barIndex, 0, syncMs / 1000, raw)
+      }
+    }
   }
 
   const stopRecordingFlow = async () => {
-    const wasRecording = isRecording
+    const wasRecording = recordingActiveRef.current
     clearTimers()
-    audioEngine.stop()
-    setIsPlaying(false)
-    isPlayingRef.current = false
+    recordingPendingRef.current = true
+    recordingActiveRef.current = false
     setRecording(false)
-    if (!wasRecording) return
-    const buffer = await audioEngine.stopRecording(project.latencyOffsetMs)
-    if (!buffer) return
+    if (!wasRecording) {
+      recordingPendingRef.current = false
+      return
+    }
+    const recordingTarget = recordingTargetRef.current
+    const targetBar = recordingTarget ? project.bars[recordingTarget.barIndex] : undefined
+    console.log('%c[FLOW] stopRecordingFlow', 'color:#fff;background:#084;padding:2px 6px', {
+      target: recordingTarget,
+      trimToSec: targetBar ? (targetBar.endSec - targetBar.startSec).toFixed(3) : undefined,
+    })
+    const buffer = await audioEngine.stopRecording(
+      project.latencyOffsetMs,
+      targetBar ? targetBar.endSec - targetBar.startSec : undefined,
+    )
+    if (!buffer) {
+      recordingPendingRef.current = false
+      recordingTargetRef.current = null
+      console.warn('[Punchin] recording stopped without microphone samples', { target: recordingTarget })
+      setStatus('No microphone audio was captured. Check the selected input and try again.')
+      return
+    }
     const blob = encodeWavFromAudioBuffer(buffer, true)
     const fileId = `take-${crypto.randomUUID()}`
+      console.log('[Punchin] recording take encoded', { fileId, frames: buffer.length })
     blobCache.current.set(fileId, blob)
     void putBlob(fileId, blob)
-    const added = addTake(currentBarIndex, fileId, 1)
-    if (!added.ok) { setStatus('Max 5 takes. Delete or replace to continue.'); return }
-    if (mode === 'punch' && autoAdvance && currentBarIndex < barCount - 1) {
-      setCurrentBar(currentBarIndex + 1)
+    const targetSlot = recordingTarget?.slot
+    if (!recordingTarget || targetSlot === undefined) {
+      recordingPendingRef.current = false
+      recordingTargetRef.current = null
+      setStatus('Arm a red take slot before recording.')
+      return
     }
-  }
-
-  const handleRecord = useCallback(async () => {
-    if (!currentBar) return
-    if (isRecording || startTimer.current) { await stopRecordingFlow(); return }
-    const barDur = currentBar.endSec - currentBar.startSec
-    const preRollSec = preRollMs / 1000
-    const span = mode === 'full-verse' ? project.beat.durationSec || barDur : barDur
-    const startPos = mode === 'full-verse' ? 0 : Math.max(0, currentBar.startSec - preRollSec)
-    audioEngine.play(startPos)
-    setIsPlaying(true)
-    isPlayingRef.current = true
-    const barLen = barDurationSec(project.beat.bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit)
-    const delayMs = Math.max(0, countInBars * barLen * 1000)
-    if (countInBars > 0) audioEngine.playCountIn(project.beat.bpm, countInBars, project.beat.timeSig.beatsPerBar)
-    const startRecordingNow = async () => {
-      await audioEngine.startRecording(project.latencyOffsetMs)
-      setRecording(true)
-      recordTimer.current = window.setTimeout(() => { void stopRecordingFlow() }, span * 1000)
+    const saved = saveTake(recordingTarget.barIndex, targetSlot, fileId, 1)
+    if (!saved.ok) {
+      recordingPendingRef.current = false
+      recordingTargetRef.current = null
+      setStatus(saved.reason === 'locked' ? 'That take is locked. Choose another slot.' : 'Could not save this take.')
+      return
     }
-    if (delayMs > 0) {
-      startTimer.current = window.setTimeout(() => { void startRecordingNow() }, delayMs)
-    } else {
-      await startRecordingNow()
+    console.log('[Punchin] take saved', { barIndex: recordingTarget.barIndex, slot: targetSlot, fileId, frames: buffer.length, durationSec: buffer.duration })
+    consumeArmedTake(recordingTarget.barIndex)
+    // Cache the decoded take so the unified bar-entry playback path can start it instantly.
+    if (saved.take) decodedTakeCache.current.set(saved.take.takeId, buffer)
+    recordingTargetRef.current = null
+    recordingPendingRef.current = false
+    setStatus(`Recorded Take ${targetSlot + 1} for Bar ${recordingTarget.barIndex + 1}.`)
+    if (mode === 'punch' && autoAdvance && recordingTarget.barIndex < barCount - 1) {
+      setCurrentBar(recordingTarget.barIndex + 1)
     }
-  }, [autoAdvance, barCount, countInBars, currentBar, currentBarIndex, isRecording, loopCurrentBar, mode, preRollMs, project.beat.bpm, project.beat.durationSec, project.beat.timeSig.beatUnit, project.beat.timeSig.beatsPerBar, project.latencyOffsetMs, setCurrentBar, setIsPlaying, setRecording, stopRecordingFlow])
-
-  const handleSectionChange = (barIndex: number, section: string) => {
-    setBars(project.bars.map((bar) => bar.index === barIndex ? { ...bar, section } : bar))
   }
 
   const [timeEditValue, setTimeEditValue] = useState<string | null>(null)
@@ -426,7 +725,6 @@ export default function App() {
         if (isPlaying) handlePause()
         else handlePlay()
       }
-      else if (key === 'r') { e.preventDefault(); void handleRecord() }
       else if (key === 'n') setCurrentBar(currentBarIndex + 1)
       else if (key === 'p') setCurrentBar(currentBarIndex - 1)
       else if (key === 'l') setLoop(!loopCurrentBar)
@@ -441,12 +739,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [currentBarIndex, handlePause, handlePlay, handleRecord, isPlaying, loopCurrentBar, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar, setLoop])
-
-  const takesForCurrentBar = useMemo(
-    () => project.takes.filter((t) => t.barIndex === currentBarIndex),
-    [project.takes, currentBarIndex],
-  )
+  }, [currentBarIndex, handlePause, handlePlay, isPlaying, loopCurrentBar, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar, setLoop])
 
   const handleExport = async (vocalsOnly: boolean) => {
     if (!project.beat.durationSec) return
@@ -469,7 +762,7 @@ export default function App() {
       let beatBuffer: AudioBuffer | undefined
       if (beatBlob && !vocalsOnly) beatBuffer = await ctx.decodeAudioData(await beatBlob.arrayBuffer())
       setExportProgress(0.35)
-      const wav = await renderOffline({ beatBuffer, takes: filtered, durationSec: project.beat.durationSec, mix: project.mix, vocalsOnly })
+      const wav = await renderOffline({ beatBuffer, takes: filtered, durationSec: project.beat.durationSec, mix: project.mix, vocalsOnly, vocalSyncMs: project.latencyOffsetMs })
       setExportProgress(1)
       const a = document.createElement('a')
       a.href = URL.createObjectURL(wav)
@@ -621,14 +914,35 @@ export default function App() {
             loopRange={loopRange}
             loopEnabled={loopEnabled}
             currentBarIndex={currentBarIndex}
+            isRecording={isRecording}
             takes={project.takes}
+            armedTakeByBar={armedTakeByBar}
             activeBarPlayback={activeBarPlayback}
             onPlayFromBar={handlePlayFromBar}
             onLoopBar={handleLoopBar}
             onStopBar={handleStop}
-            onRecordBar={handleRecordFromBar}
+            onArmTake={(barIndex, slot) => {
+              setCurrentBar(barIndex)
+              armTake(barIndex, slot)
+              if (isPlayingRef.current) {
+                const position = audioEngine.currentTime
+                const bar = project.bars[barIndex]
+                if (bar && position >= bar.startSec && position < bar.endSec) {
+                  // Wait for the next loop entry instead of starting mid-bar.
+                  lastPlayingBarRef.current = barIndex
+                  previousAudioTimeRef.current = position
+                  console.log('[Punchin] take armed during active bar; waiting for next entry', { barIndex, position })
+                }
+              }
+              setStatus(`Take ${slot + 1} armed for Bar ${barIndex + 1}. Press Play or Loop on that bar to record.`)
+            }}
+            onDisarmTake={disarmTake}
+            onSelectTake={selectTake}
+            onListenTake={listenToTake}
+            onSelectNoTake={clearTakeSelection}
+            onDeleteTake={deleteTake}
+            onToggleTakeLock={toggleTakeLock}
             onFocusBar={setCurrentBar}
-            onSectionChange={handleSectionChange}
             onEdgeChange={handleBarUpdate}
             onLoopChange={handleLoopChange}
             onLoopEnabledChange={setLoopEnabled}
@@ -662,41 +976,53 @@ export default function App() {
             barCount={barCount}
             autoAdvance={autoAdvance}
             loopCurrentBar={loopCurrentBar}
-            isRecording={isRecording}
             onModeChange={setMode}
             onPrev={() => setCurrentBar(currentBarIndex - 1)}
             onNext={() => setCurrentBar(currentBarIndex + 1)}
             onToggleAutoAdvance={setAutoAdvance}
             onToggleLoop={setLoop}
-            onRecord={handleRecord}
-          />
-
-          <TakesPanel
-            takes={takesForCurrentBar}
-            maxReached={takesForCurrentBar.length >= 5}
-            onSelect={(id) => selectTake(currentBarIndex, id)}
-            onDelete={(id) => deleteTake(id)}
           />
 
           <div className="row">
             <div className="panel">
               <div className="section-title">
-                <h3>Latency</h3>
-                <span className="tag">ms</span>
+                <h3>Recording sync</h3>
+                <span className="tag">global</span>
               </div>
               <div className="controls">
                 <label className="flex-gap">
-                  Offset
+                  Shift vocals
                   <input
                     type="range"
-                    min={-200}
-                    max={200}
+                    min={-10000}
+                    max={10000}
+                    step={10}
+                    value={project.latencyOffsetMs}
+                    onChange={(e) => updateGlobalSync(Number(e.target.value))}
+                  />
+                  <span className="text-muted">{project.latencyOffsetMs > 0 ? '+' : ''}{project.latencyOffsetMs} ms</span>
+                </label>
+                <label className="flex-gap">
+                  Exact ms
+                  <input
+                    type="number"
+                    min={-10000}
+                    max={10000}
                     step={1}
                     value={project.latencyOffsetMs}
-                    onChange={(e) => setLatencyOffset(Number(e.target.value))}
+                    onChange={(e) => updateGlobalSync(Number(e.target.value) || 0)}
+                    style={{ width: 86 }}
                   />
-                  <span className="text-muted">{project.latencyOffsetMs} ms</span>
                 </label>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 1000)} title="Shift vocals 1 second earlier">-1 sec</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1000)} title="Shift vocals 1 second later">+1 sec</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 100)} title="Shift vocals 100 milliseconds earlier">-100 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 100)} title="Shift vocals 100 milliseconds later">+100 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 10)} title="Shift vocals 10 milliseconds earlier">-10 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 10)} title="Shift vocals 10 milliseconds later">+10 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 1)} title="Shift vocals 1 millisecond earlier">-1 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1)} title="Shift vocals 1 millisecond later">+1 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(0)}>Reset</button>
                 <button
                   className={monitorEnabled ? 'secondary' : ''}
                   onClick={() => {
@@ -724,6 +1050,9 @@ export default function App() {
                   />
                   <span className="text-muted">{monitorGain.toFixed(2)}</span>
                 </label>
+                <button className="secondary" onClick={() => { setCalibrationError(undefined); setCalibrationOpen(true) }}>
+                  Calibrate audio
+                </button>
               </div>
             </div>
             <Mixer
@@ -746,6 +1075,16 @@ export default function App() {
           />
         </div>
       </div>
+      <CalibrationDialog
+        open={calibrationOpen}
+        busy={calibrationBusy}
+        error={calibrationError}
+        manualClap={calibrationManual}
+        detectedHits={calibrationHits}
+        micLevel={calibrationLevel}
+        onCalibrate={runCalibration}
+        onClose={() => setCalibrationOpen(false)}
+      />
     </div>
   )
 }
