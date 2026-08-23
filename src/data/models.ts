@@ -1,0 +1,47 @@
+export interface Project {
+  id: string
+  name: string
+  sampleRate: number
+  createdAt: string
+  latencyOffsetMs: number
+  beat: {
+    fileId: string
+    durationSec: number
+    bpm: number
+    offsetSec?: number
+    timeSig: { beatsPerBar: number; beatUnit: number }
+  }
+  bars: Bar[]
+  takes: Take[]
+  mix: MixSettings
+}
+
+export interface Bar {
+  index: number
+  startSec: number
+  endSec: number
+  locked?: boolean
+  section?: string
+}
+
+export interface Take {
+  takeId: string
+  barIndex: number
+  fileId: string
+  gain: number
+  selected: boolean
+  createdAt: string
+}
+
+export interface MixSettings {
+  masterBeatGain: number
+  globalVocalGain: number
+  barGains: Record<number, number>
+}
+
+export type PunchMode = 'punch' | 'full-verse'
+
+export interface PlaybackState {
+  isPlaying: boolean
+  currentTime: number
+}
