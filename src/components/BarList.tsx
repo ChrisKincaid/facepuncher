@@ -3,6 +3,7 @@ import { formatTime } from '../utils/time'
 import type { Bar, Take } from '../data/models'
 import { BarWaveformEditor } from './BarWaveformEditor'
 import { TakeSlots } from './TakeSlots'
+import { DragVolumeSlider } from './DragVolumeSlider'
 
 interface Props {
   bars: Bar[]
@@ -27,6 +28,9 @@ interface Props {
   onFocusBar: (barIndex: number) => void
   onEdgeChange: (barIndex: number, startSec: number, endSec: number, allowGaps: boolean) => void
   onLoopChange: (start: number, end: number) => void
+  barGains: Record<number, number>
+  onBarGain: (barIndex: number, value: number) => void
+  onTakeGain: (takeId: string, value: number) => void
 }
 
 export function BarList({
@@ -52,6 +56,9 @@ export function BarList({
   onFocusBar,
   onEdgeChange,
   onLoopChange,
+  barGains,
+  onBarGain,
+  onTakeGain,
 }: Props) {
   const [editingBar, setEditingBar] = useState<number | null>(null)
   const startSel = loopRange?.start ?? 0
@@ -59,8 +66,8 @@ export function BarList({
 
   return (
     <div className="panel">
-      <div className="section-title" style={{ marginBottom: 6 }}>
-        <h3>Bars</h3>
+      <div className="collapsible-header" style={{ marginBottom: 6 }}>
+        <span className="collapsible-title">Bars</span>
       </div>
 
       <div className="bar-list">
@@ -71,6 +78,8 @@ export function BarList({
           const activePlayback = activeBarPlayback?.barIndex === bar.index ? activeBarPlayback.mode : null
           const isLoopStart = loopRange?.start === bar.index
           const isLoopEnd = loopRange?.end === bar.index
+          const selectedTake = barTakes.find((t) => t.selected)
+          const barGainValue = barGains?.[bar.index] ?? 1
           return (
             <div
               key={bar.index}
@@ -97,6 +106,31 @@ export function BarList({
                   onDelete={onDeleteTake}
                   onToggleLock={onToggleTakeLock}
                 />
+              </div>
+              <div className="bar-gains" onClick={(e) => e.stopPropagation()}>
+                <div className="bar-gain-row">
+                  <span className="bar-gain-label">Bar Vol</span>
+                  <DragVolumeSlider
+                    label="Bar Vol"
+                    value={barGainValue}
+                    onChange={(v) => onBarGain(bar.index, v)}
+                    title="Volume for this bar — affects every take played on it"
+                  />
+                  <span className="text-muted bar-gain-value">{barGainValue.toFixed(2)}</span>
+                </div>
+                <div className="bar-gain-row">
+                  <span className="bar-gain-label">
+                    Take Vol {selectedTake ? `(Take ${barTakes.indexOf(selectedTake) + 1})` : '(none)'}
+                  </span>
+                  <DragVolumeSlider
+                    label="Take Vol"
+                    value={selectedTake?.gain ?? 1}
+                    disabled={!selectedTake}
+                    onChange={(v) => selectedTake && onTakeGain(selectedTake.takeId, v)}
+                    title={selectedTake ? 'Volume for the currently selected take on this bar' : 'Select a take to adjust its volume'}
+                  />
+                  <span className="text-muted bar-gain-value">{(selectedTake?.gain ?? 1).toFixed(2)}</span>
+                </div>
               </div>
               <div className="bar-edges">
                 {editingBar === bar.index ? (

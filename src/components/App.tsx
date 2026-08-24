@@ -3,7 +3,6 @@ import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { Mixer } from './Mixer'
 import { ExportDialog } from './ExportDialog'
 import { BarList } from './BarList'
-import { CalibrationDialog } from './CalibrationDialog'
 import { useStore } from '../state/store'
 import { generateBars, updateBarPosition } from '../analysis/bpmGrid'
 import { estimateBpmFromBuffer } from '../analysis/onsetEstimate'
@@ -15,7 +14,6 @@ import { getBlob, listProjects, putBlob, saveProject } from '../data/storage'
 import type { Take } from '../data/models'
 
 const DEFAULT_LOOP_END_INDEX = 15
-const CALIBRATION_STORAGE_KEY = 'punchin-audio-calibration-v2'
 
 export default function App() {
   const {
@@ -39,6 +37,7 @@ export default function App() {
     clearTakeSelection,
     deleteTake,
     toggleTakeLock,
+    setTakeGain,
     updateMix,
     setProject,
   } = useStore()
@@ -71,16 +70,12 @@ export default function App() {
   const [monitorGain, setMonitorGain] = useState(0.8)
   const [detectBusy, setDetectBusy] = useState(false)
   const [showImportHelp, setShowImportHelp] = useState(false)
+  const [showPlaybackSync, setShowPlaybackSync] = useState(true)
+  const [showMixer, setShowMixer] = useState(true)
   const [loopRange, setLoopRange] = useState<{ start: number; end: number } | undefined>(undefined)
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [waveformResetKey, setWaveformResetKey] = useState(0)
   const [activeBarPlayback, setActiveBarPlayback] = useState<{ barIndex: number; mode: 'play' | 'loop' } | undefined>(undefined)
-    const [calibrationOpen, setCalibrationOpen] = useState(false)
-    const [calibrationBusy, setCalibrationBusy] = useState(false)
-    const [calibrationError, setCalibrationError] = useState<string | undefined>()
-    const [calibrationManual, setCalibrationManual] = useState(false)
-    const [calibrationHits, setCalibrationHits] = useState(0)
-    const [calibrationLevel, setCalibrationLevel] = useState(0)
   const manualOffsetRef = useRef(false)
 
   const totalDuration = useMemo(
@@ -92,28 +87,6 @@ export default function App() {
   useEffect(() => {
     vocalSyncMsRef.current = project.latencyOffsetMs
   }, [project.latencyOffsetMs])
-
-  const runCalibration = async (manualClap: boolean) => {
-    setCalibrationBusy(true)
-    setCalibrationError(undefined)
-    setCalibrationManual(manualClap)
-    setCalibrationHits(0)
-    const meter = window.setInterval(() => setCalibrationLevel(audioEngine.microphoneLevel), 80)
-    try {
-      const correction = await audioEngine.calibrateMicrophone(manualClap, setCalibrationHits)
-      setLatencyOffset(correction)
-      localStorage.setItem(CALIBRATION_STORAGE_KEY, 'true')
-      setCalibrationOpen(false)
-      setStatus(`Audio setup complete. Timing correction applied.`)
-    } catch (err) {
-      console.error('calibration failed', err)
-      setCalibrationError('Calibration could not detect enough clear hits. Try again in a quiet room.')
-    } finally {
-      window.clearInterval(meter)
-      setCalibrationLevel(0)
-      setCalibrationBusy(false)
-    }
-  }
 
   useEffect(() => {
     saveProject(project).catch((err) => console.error('autosave failed', err))
@@ -812,15 +785,19 @@ export default function App() {
 
       <div className="app-main">
         <div className="shell">
-          <div className="section-title">
-            <h2 style={{ margin: 0 }}>Bar-by-Bar Punch Recorder</h2>
+          <div className="app-title-block">
+            <h2 className="app-title">PUNCHLINE</h2>
+            <div className="app-title-credit">
+              brought to you by{' '}
+              <a href="https://boxbap.com" target="_blank" rel="noopener noreferrer">BOXBAP</a>
+            </div>
           </div>
 
           <div className="panel">
-            <div className="section-title">
-              <h3>Import Beat</h3>
+            <div className="collapsible-header">
+              <span className="collapsible-title">Import Beat</span>
               <button
-                className="bwe-help"
+                className="bwe-help collapsible-corner"
                 type="button"
                 aria-label="Explain Import Beat controls"
                 title="Explain Import Beat controls"
@@ -899,8 +876,88 @@ export default function App() {
               disabled={!audioLoaded}
               title={loopEnabled ? 'Loop is on — click to turn off' : 'Loop is off — click to turn on'}
             >
-              {loopRange ? `\u21bb Bar ${loopRange.start + 1}-${loopRange.end + 1}` : '\u21bb Loop'}
+              {`\u21bb ${loopEnabled ? 'Loop Off' : 'Loop On'}`}{loopRange ? ` \u00b7 Bar ${loopRange.start + 1}-${loopRange.end + 1}` : ''}
             </button>
+          </div>
+
+          <Mixer
+            mix={project.mix}
+            collapsed={!showMixer}
+            onToggleCollapsed={() => setShowMixer((v) => !v)}
+            onMasterGain={(v) => updateMix({ masterBeatGain: v })}
+            onGlobalVocalGain={(v) => updateMix({ globalVocalGain: v })}
+            monitorEnabled={monitorEnabled}
+            monitorGain={monitorGain}
+            onToggleMonitor={() => {
+              if (monitorEnabled) {
+                audioEngine.setMonitorGain(0)
+                setMonitorEnabled(false)
+                return
+              }
+              audioEngine
+                .startMicMonitor(monitorGain)
+                .then(() => {
+                  // The monitor gain node persists once created, so its value
+                  // must be explicitly restored after a mute (gain 0).
+                  audioEngine.setMonitorGain(monitorGain)
+                  setMonitorEnabled(true)
+                })
+                .catch((err) => setStatus(`Mic permission failed: ${String(err)}`))
+            }}
+            onMonitorGain={(v) => {
+              setMonitorGain(v)
+              audioEngine.setMonitorGain(v)
+            }}
+          />
+
+          <div className={`panel ${showPlaybackSync ? '' : 'section-collapsed'}`}>
+            <div className="collapsible-header">
+              <span className="collapsible-title">PLAYBACK SYNC</span>
+              <button
+                className="secondary collapsible-toggle"
+                onClick={() => setShowPlaybackSync((v) => !v)}
+                title={showPlaybackSync ? 'Hide playback sync controls' : 'Show playback sync controls'}
+              >
+                {showPlaybackSync ? '▾ Hide' : '▸ Show'}
+              </button>
+            </div>
+            {showPlaybackSync && (
+              <div className="controls">
+                <label className="flex-gap">
+                  Shift vocals
+                  <input
+                    type="range"
+                    min={-10000}
+                    max={10000}
+                    step={10}
+                    value={project.latencyOffsetMs}
+                    onChange={(e) => updateGlobalSync(Number(e.target.value))}
+                  />
+                  <span className="text-muted">{project.latencyOffsetMs > 0 ? '+' : ''}{project.latencyOffsetMs} ms</span>
+                </label>
+                <label className="flex-gap">
+                  Exact ms
+                  <input
+                    type="number"
+                    min={-10000}
+                    max={10000}
+                    step={1}
+                    value={project.latencyOffsetMs}
+                    onChange={(e) => updateGlobalSync(Number(e.target.value) || 0)}
+                    style={{ width: 86 }}
+                  />
+                </label>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 1000)} title="Shift vocals 1 second earlier">-1 sec</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1000)} title="Shift vocals 1 second later">+1 sec</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 100)} title="Shift vocals 100 milliseconds earlier">-100 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 100)} title="Shift vocals 100 milliseconds later">+100 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 10)} title="Shift vocals 10 milliseconds earlier">-10 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 10)} title="Shift vocals 10 milliseconds later">+10 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 1)} title="Shift vocals 1 millisecond earlier">-1 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1)} title="Shift vocals 1 millisecond later">+1 ms</button>
+                <button className="secondary" onClick={() => updateGlobalSync(0)}>Reset</button>
+              </div>
+            )}
           </div>
 
           <BarList
@@ -940,90 +997,10 @@ export default function App() {
             onFocusBar={setCurrentBar}
             onEdgeChange={handleBarUpdate}
             onLoopChange={handleLoopChange}
+            barGains={project.mix.barGains}
+            onBarGain={(barIdx, v) => updateMix({ barGains: { ...project.mix.barGains, [barIdx]: v } })}
+            onTakeGain={setTakeGain}
           />
-
-          <div className="row">
-            <div className="panel">
-              <div className="section-title">
-                <h3>Recording sync</h3>
-                <span className="tag">global</span>
-              </div>
-              <div className="controls">
-                <label className="flex-gap">
-                  Shift vocals
-                  <input
-                    type="range"
-                    min={-10000}
-                    max={10000}
-                    step={10}
-                    value={project.latencyOffsetMs}
-                    onChange={(e) => updateGlobalSync(Number(e.target.value))}
-                  />
-                  <span className="text-muted">{project.latencyOffsetMs > 0 ? '+' : ''}{project.latencyOffsetMs} ms</span>
-                </label>
-                <label className="flex-gap">
-                  Exact ms
-                  <input
-                    type="number"
-                    min={-10000}
-                    max={10000}
-                    step={1}
-                    value={project.latencyOffsetMs}
-                    onChange={(e) => updateGlobalSync(Number(e.target.value) || 0)}
-                    style={{ width: 86 }}
-                  />
-                </label>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 1000)} title="Shift vocals 1 second earlier">-1 sec</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1000)} title="Shift vocals 1 second later">+1 sec</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 100)} title="Shift vocals 100 milliseconds earlier">-100 ms</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 100)} title="Shift vocals 100 milliseconds later">+100 ms</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 10)} title="Shift vocals 10 milliseconds earlier">-10 ms</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 10)} title="Shift vocals 10 milliseconds later">+10 ms</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs - 1)} title="Shift vocals 1 millisecond earlier">-1 ms</button>
-                <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1)} title="Shift vocals 1 millisecond later">+1 ms</button>
-                <button className="secondary" onClick={() => updateGlobalSync(0)}>Reset</button>
-                <button
-                  className={monitorEnabled ? 'secondary' : ''}
-                  onClick={() => {
-                    audioEngine
-                      .startMicMonitor(monitorGain)
-                      .then(() => setMonitorEnabled(true))
-                      .catch((err) => setStatus(`Mic permission failed: ${String(err)}`))
-                  }}
-                >
-                  {monitorEnabled ? 'Monitoring On' : 'Enable Monitor'}
-                </button>
-                <label className="flex-gap">
-                  Monitor gain
-                  <input
-                    type="range"
-                    min={0}
-                    max={2}
-                    step={0.01}
-                    value={monitorGain}
-                    onChange={(e) => {
-                      const v = Number(e.target.value)
-                      setMonitorGain(v)
-                      audioEngine.setMonitorGain(v)
-                    }}
-                  />
-                  <span className="text-muted">{monitorGain.toFixed(2)}</span>
-                </label>
-                <button className="secondary" onClick={() => { setCalibrationError(undefined); setCalibrationOpen(true) }}>
-                  Calibrate audio
-                </button>
-              </div>
-            </div>
-            <Mixer
-              mix={project.mix}
-              currentBarIndex={currentBarIndex}
-              onMasterGain={(v) => updateMix({ masterBeatGain: v })}
-              onGlobalVocalGain={(v) => updateMix({ globalVocalGain: v })}
-              onBarGain={(barIdx, v) =>
-                updateMix({ barGains: { ...project.mix.barGains, [barIdx]: v } })
-              }
-            />
-          </div>
 
           <ExportDialog
             onExportMix={() => handleExport(false)}
@@ -1034,16 +1011,6 @@ export default function App() {
           />
         </div>
       </div>
-      <CalibrationDialog
-        open={calibrationOpen}
-        busy={calibrationBusy}
-        error={calibrationError}
-        manualClap={calibrationManual}
-        detectedHits={calibrationHits}
-        micLevel={calibrationLevel}
-        onCalibrate={runCalibration}
-        onClose={() => setCalibrationOpen(false)}
-      />
     </div>
   )
 }

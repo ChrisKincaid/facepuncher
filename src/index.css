@@ -123,6 +123,170 @@ body {
   overflow: hidden;
 }
 
+.mixer-rack {
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* Tighten a collapsible section down to just its header when hidden. */
+.mixer-rack.section-collapsed,
+.panel.section-collapsed {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.section-collapsed .collapsible-header {
+  margin-bottom: 0;
+}
+
+.mixer-rack-title {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+/* Shared centered header with a right-aligned hide/show toggle. */
+.collapsible-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  margin-bottom: 10px;
+}
+
+.collapsible-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.collapsible-toggle {
+  position: absolute;
+  right: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Round corner control (e.g. the ? help button) pinned like the toggle. */
+.collapsible-corner {
+  position: absolute;
+  right: 0;
+}
+
+.export-buttons {
+  display: flex;
+  gap: 4%;
+}
+
+.mixer-fader-nudge {
+  width: 26px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(148, 156, 166, 0.28);
+  border-radius: 4px;
+  background: rgba(148, 156, 166, 0.1);
+  color: var(--text);
+  font-size: 9px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mixer-fader-nudge:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.mixer-strips {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 10%;
+}
+
+.mixer-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 64px;
+}
+
+.mixer-strip-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mixer-fader-track {
+  position: relative;
+  width: 34px;
+  height: 130px;
+  border-radius: 8px;
+  background: #0d0e16;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.mixer-fader-fill {
+  width: 100%;
+  background: linear-gradient(180deg, var(--accent), rgba(77, 208, 225, 0.35));
+  pointer-events: none;
+}
+
+.mixer-fader-fill-accent {
+  background: linear-gradient(180deg, var(--accent-2), rgba(246, 193, 119, 0.35));
+}
+
+.mixer-strip-label {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mixer-monitor-strip {
+  justify-content: flex-end;
+  height: 154px;
+}
+
+.mixer-monitor-switch {
+  width: 52px;
+  height: 28px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #0d0e16;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  transition: background-color 120ms ease;
+}
+
+.mixer-monitor-switch.mixer-monitor-on {
+  background: rgba(77, 208, 225, 0.35);
+  justify-content: flex-end;
+}
+
+.mixer-monitor-knob {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
 .playback-play-group .playback-wide-button {
   border-radius: 0;
 }
@@ -152,6 +316,31 @@ body {
   gap: 14px;
 }
 
+.app-title-block {
+  text-align: center;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 1.5px;
+}
+
+.app-title-credit {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.app-title-credit a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.app-title-credit a:hover {
+  text-decoration: underline;
+}
+
 .main-col {
   display: flex;
   flex-direction: column;
@@ -169,73 +358,6 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px 14px;
-}
-
-.calibration-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(4, 6, 10, 0.72);
-}
-
-.calibration-dialog {
-  width: min(480px, 100%);
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: #13141c;
-  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.5);
-}
-
-.calibration-close {
-  padding: 4px 9px;
-  font-size: 18px;
-}
-
-.calibration-choice {
-  display: grid;
-  gap: 7px;
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.calibration-error {
-  margin-top: 12px;
-  padding: 9px;
-  color: #ffb5b8;
-  border: 1px solid rgba(227, 64, 75, 0.45);
-  border-radius: 6px;
-  background: rgba(227, 64, 75, 0.12);
-}
-
-.calibration-note {
-  margin-bottom: 0;
-}
-
-.calibration-progress {
-  display: grid;
-  gap: 7px;
-  margin-top: 14px;
-}
-
-.calibration-meter {
-  height: 10px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: #0f1018;
-}
-
-.calibration-meter span {
-  display: block;
-  height: 100%;
-  background: var(--accent-2);
-  transition: width 80ms linear;
 }
 
 .panel h3 {
@@ -412,7 +534,7 @@ select {
 
 .bar-row {
   display: grid;
-  grid-template-columns: 180px minmax(220px, 1fr) 110px minmax(320px, 360px);
+  grid-template-columns: 150px 250px minmax(220px, 1fr) 90px minmax(260px, 300px);
   gap: 8px;
   align-items: center;
   padding: 8px;
@@ -508,6 +630,158 @@ select {
   justify-content: flex-start;
   flex-wrap: nowrap;
   min-width: 0;
+}
+
+.bar-gains {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.bar-gain-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.bar-gain-label {
+  flex-shrink: 0;
+  width: 96px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-gain-value {
+  flex-shrink: 0;
+  width: 32px;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* ── expanding drag-to-adjust volume slider ── */
+.drag-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.drag-slider-nudge {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(148, 156, 166, 0.28);
+  border-radius: 4px;
+  background: rgba(148, 156, 166, 0.1);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drag-slider-nudge:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.drag-slider-nudge:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.drag-slider-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  border-radius: 5px;
+  background: rgba(148, 156, 166, 0.16);
+  touch-action: none;
+  cursor: ew-resize;
+}
+
+.drag-slider-track::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.drag-slider-fill {
+  position: relative;
+  height: 4px;
+  margin-left: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.drag-slider-dragging {
+  background: rgba(77, 208, 225, 0.22);
+}
+
+.drag-slider-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+body.drag-slider-active,
+body.drag-slider-active * {
+  cursor: none !important;
+  user-select: none !important;
+}
+
+.drag-slider-overlay {
+  position: fixed;
+  z-index: 200;
+  transform: translateX(-50%);
+  width: 220px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #13141c;
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.drag-slider-overlay-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.drag-slider-overlay-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.drag-slider-overlay-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent);
+}
+
+.drag-slider-overlay-value {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
 }
 
 .bar-takes {

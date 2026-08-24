@@ -28,6 +28,7 @@ interface StoreState extends UIState {
   clearTakeSelection: (barIndex: number) => void
   deleteTake: (takeId: string) => void
   toggleTakeLock: (takeId: string) => void
+  setTakeGain: (takeId: string, gain: number) => void
   updateMix: (mix: Partial<MixSettings>) => void
 }
 
@@ -205,6 +206,16 @@ export const useStore = create<StoreState>((set, get) => ({
       project: {
         ...state.project,
         takes: state.project.takes.map((take) => take.takeId === takeId ? { ...take, locked: !take.locked } : take),
+      },
+    }))
+  },
+
+  setTakeGain(takeId, gain) {
+    const clamped = Math.max(0, Math.min(2, gain))
+    set((state) => ({
+      project: {
+        ...state.project,
+        takes: state.project.takes.map((take) => take.takeId === takeId ? { ...take, gain: clamped } : take),
       },
     }))
   },

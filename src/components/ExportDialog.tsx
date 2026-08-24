@@ -9,23 +9,22 @@ interface Props {
 export function ExportDialog({ onExportMix, onExportVocals, progress, isRendering, disabled }: Props) {
   return (
     <div className="panel">
-      <div className="section-title">
-        <h3>Export</h3>
-        <span className="tag">WAV 44.1k</span>
+      <div className="collapsible-header">
+        <span className="collapsible-title">Export</span>
       </div>
-      <div className="controls">
-        <button onClick={onExportMix} disabled={disabled || isRendering}>
+      <div className="export-buttons">
+        <button className="playback-wide-button" onClick={onExportMix} disabled={disabled || isRendering}>
           Mix (Beat + Vocals)
         </button>
-        <button className="secondary" onClick={onExportVocals} disabled={disabled || isRendering}>
+        <button className="secondary playback-wide-button" onClick={onExportVocals} disabled={disabled || isRendering}>
           Vocals only
         </button>
-        {isRendering && (
-          <div className="progress">
-            <span style={{ width: `${Math.min(progress * 100, 100)}%` }}></span>
-          </div>
-        )}
       </div>
+      {isRendering && (
+        <div className="progress" style={{ marginTop: 10 }}>
+          <span style={{ width: `${Math.min(progress * 100, 100)}%` }}></span>
+        </div>
+      )}
     </div>
   )
 }
