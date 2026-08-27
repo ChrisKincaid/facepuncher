@@ -8,7 +8,10 @@ interface Props {
   prevBarEnd: number
   nextBarStart: number
   playhead: number
+  isPlaying?: boolean
+  getPlaybackTime?: () => number
   onEdgeChange: (start: number, end: number, allowGaps: boolean) => void
+  anchorOnly?: boolean
 }
 
 const HIT = 16   // px hit-test tolerance for drag handles
@@ -20,6 +23,7 @@ export function BarWaveformEditor(props: Props) {
   const peaksRef  = useRef<Float32Array | null>(null)
   const dragging  = useRef<'start' | 'end' | null>(null)
   const drawRef = useRef<() => void>(() => {})
+  const livePlayheadRef = useRef(props.playhead)
 
   // All mutable state lives in refs so draw() and window listeners always see fresh values
   const stateRef = useRef({
@@ -46,10 +50,26 @@ export function BarWaveformEditor(props: Props) {
 
   useEffect(() => {
     propsRef.current = props
+    // While playing, the dedicated rAF loop below is the sole authority on playhead
+    // position — overwriting it here with the parent's throttled React-state prop
+    // would fight the rAF value every render and produce visible stutter/jumps.
+    if (!props.isPlaying) livePlayheadRef.current = props.playhead
     zoomTargetRef.current = zoomTarget
     maintainLengthRef.current = maintainLength
     allowGapsRef.current = allowGaps
   }, [allowGaps, maintainLength, props, zoomTarget])
+
+  useEffect(() => {
+    if (!props.isPlaying) return
+    let frame = 0
+    const renderPlayhead = () => {
+      livePlayheadRef.current = propsRef.current.getPlaybackTime?.() ?? propsRef.current.playhead
+      drawRef.current()
+      frame = window.requestAnimationFrame(renderPlayhead)
+    }
+    frame = window.requestAnimationFrame(renderPlayhead)
+    return () => window.cancelAnimationFrame(frame)
+  }, [props.isPlaying])
 
   // ── view window (affected by zoom) ─────────────────────────────────────
   function computeViewWindow(zoom: number): { start: number; end: number } {
@@ -138,6 +158,7 @@ export function BarWaveformEditor(props: Props) {
     const ds = Math.abs(x - timeToX(start, w))
     const de = Math.abs(x - timeToX(end, w))
     if (ds <= HIT && ds <= de) return 'start'
+    if (propsRef.current.anchorOnly) return null
     if (de <= HIT) return 'end'
     return null
   }
@@ -153,7 +174,7 @@ export function BarWaveformEditor(props: Props) {
 
     const { start: vs, end: ve } = stateRef.current.view
     const { start: hs, end: he } = stateRef.current.handles
-    const ph = propsRef.current.playhead
+    const ph = livePlayheadRef.current
 
     ctx.fillStyle = '#0b0c14'
     ctx.fillRect(0, 0, w, h)
@@ -191,16 +212,18 @@ export function BarWaveformEditor(props: Props) {
     ctx.beginPath(); ctx.moveTo(shx, 0); ctx.lineTo(shx + 11, 0); ctx.lineTo(shx, 14); ctx.closePath(); ctx.fill()
     ctx.restore()
 
-    // End handle (amber)
-    ctx.save()
-    ctx.strokeStyle = '#f6c177'
-    ctx.lineWidth = 2
-    ctx.shadowColor = '#f6c177'
-    ctx.shadowBlur = 8
-    ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx, h); ctx.stroke()
-    ctx.fillStyle = '#f6c177'
-    ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx - 11, 0); ctx.lineTo(ehx, 14); ctx.closePath(); ctx.fill()
-    ctx.restore()
+    if (!propsRef.current.anchorOnly) {
+      // End handle (amber)
+      ctx.save()
+      ctx.strokeStyle = '#f6c177'
+      ctx.lineWidth = 2
+      ctx.shadowColor = '#f6c177'
+      ctx.shadowBlur = 8
+      ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx, h); ctx.stroke()
+      ctx.fillStyle = '#f6c177'
+      ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx - 11, 0); ctx.lineTo(ehx, 14); ctx.closePath(); ctx.fill()
+      ctx.restore()
+    }
 
     // Playhead
     const phx = timeToX(ph, w)
@@ -387,7 +410,7 @@ export function BarWaveformEditor(props: Props) {
     if (!drag) return
     const target = zoomTargetRef.current === 'start' ? propsRef.current.barStartSec : propsRef.current.barEndSec
     const distance = drag.startY - e.clientY
-    const nextZoom = Math.max(0.25, Math.min(16, drag.startZoom * Math.pow(1.01, distance)))
+    const nextZoom = Math.max(0.25, Math.min(32, drag.startZoom * Math.pow(1.01, distance)))
     setZoomLevel(nextZoom)
     setViewCenter(target)
   }
@@ -403,8 +426,8 @@ export function BarWaveformEditor(props: Props) {
     <div className="bar-waveform-editor">
       <div className="bar-waveform-legend">
         <span style={{ color: '#4dd0e1' }}>▶ Start</span>
-        <span className="text-muted" style={{ fontSize: 11 }}>drag handles · cyan = start · amber = end</span>
-        <span style={{ color: '#f6c177' }}>End ◀</span>
+        <span className="text-muted" style={{ fontSize: 11 }}>{props.anchorOnly ? 'drag the cyan handle to align Bar 1' : 'drag handles · cyan = start · amber = end'}</span>
+        {!props.anchorOnly && <span style={{ color: '#f6c177' }}>End ◀</span>}
       </div>
 
       <div className="bwe-controls">
@@ -413,11 +436,13 @@ export function BarWaveformEditor(props: Props) {
           <span className="bwe-ctrl-label" style={{ color: '#4dd0e1' }}>Start</span>
           <button className="secondary bwe-nudge" title="Move start earlier" onClick={(e) => { e.stopPropagation(); nudgeHandle('start', -1) }}>◄</button>
           <button className="secondary bwe-nudge" title="Move start later" onClick={(e) => { e.stopPropagation(); nudgeHandle('start', 1) }}>►</button>
-          <span className="bwe-ctrl-sep" />
-          <span className="bwe-ctrl-label" style={{ color: '#f6c177' }}>End</span>
-          <button className="secondary bwe-nudge" title="Move end earlier" onClick={(e) => { e.stopPropagation(); nudgeHandle('end', -1) }}>◄</button>
-          <button className="secondary bwe-nudge" title="Move end later" onClick={(e) => { e.stopPropagation(); nudgeHandle('end', 1) }}>►</button>
-          <span className="bwe-ctrl-sep" />
+          {!props.anchorOnly && <>
+            <span className="bwe-ctrl-sep" />
+            <span className="bwe-ctrl-label" style={{ color: '#f6c177' }}>End</span>
+            <button className="secondary bwe-nudge" title="Move end earlier" onClick={(e) => { e.stopPropagation(); nudgeHandle('end', -1) }}>◄</button>
+            <button className="secondary bwe-nudge" title="Move end later" onClick={(e) => { e.stopPropagation(); nudgeHandle('end', 1) }}>►</button>
+            <span className="bwe-ctrl-sep" />
+          </>}
           <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
             Nudge by
             <select
@@ -437,33 +462,35 @@ export function BarWaveformEditor(props: Props) {
               <option value="zero-crossing">Zero crossing</option>
             </select>
           </label>
-          <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
-            <input
-              type="checkbox"
-              checked={maintainLength}
-              onChange={(e) => { e.stopPropagation(); setMaintainLength(e.target.checked) }}
-            />
-            Maintain bar length
-          </label>
-          <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
-            <input
-              type="checkbox"
-              checked={allowGaps}
-              onChange={(e) => { e.stopPropagation(); setAllowGaps(e.target.checked) }}
-            />
-            Allow gaps
-          </label>
-          <button
-            className="bwe-help"
-            type="button"
-            aria-label="Explain bar boundary options"
-            title="Explain bar boundary options"
-            onClick={(e) => { e.stopPropagation(); setShowHelp((visible) => !visible) }}
-          >
-            ?
-          </button>
+          {!props.anchorOnly && <>
+            <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={maintainLength}
+                onChange={(e) => { e.stopPropagation(); setMaintainLength(e.target.checked) }}
+              />
+              Maintain bar length
+            </label>
+            <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={allowGaps}
+                onChange={(e) => { e.stopPropagation(); setAllowGaps(e.target.checked) }}
+              />
+              Allow gaps
+            </label>
+            <button
+              className="bwe-help"
+              type="button"
+              aria-label="Explain bar boundary options"
+              title="Explain bar boundary options"
+              onClick={(e) => { e.stopPropagation(); setShowHelp((visible) => !visible) }}
+            >
+              ?
+            </button>
+          </>}
         </div>
-        {showHelp && (
+        {!props.anchorOnly && showHelp && (
           <div className="bwe-help-text">
             <strong>Maintain bar length:</strong> moving one boundary moves the other so this bar keeps its duration.<br />
             <strong>Allow gaps:</strong> lets this bar stop before the next bar or start after the previous bar. Gaps can cause missing recording or playback time and other unwanted behavior. Overlapping bars are never allowed because they would make playback and recording ownership ambiguous.
@@ -473,28 +500,28 @@ export function BarWaveformEditor(props: Props) {
         {/* ── zoom row ── */}
         <div className="bwe-ctrl-row">
           <span className="bwe-ctrl-label">Zoom</span>
-          <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
-            Center
-            <select
-              value={zoomTarget}
-              onChange={(e) => {
-                e.stopPropagation()
-                const nextTarget = e.target.value as 'start' | 'end'
-                setZoomTarget(nextTarget)
-                zoomTargetRef.current = nextTarget
-                setViewCenter(nextTarget === 'start' ? props.barStartSec : props.barEndSec)
-              }}
-              style={{ fontSize: 11, padding: '2px 5px' }}
-            >
-              <option value="start">Start</option>
-              <option value="end">End</option>
-            </select>
-          </label>
+          {!props.anchorOnly && <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
+              Center
+              <select
+                value={zoomTarget}
+                onChange={(e) => {
+                  e.stopPropagation()
+                  const nextTarget = e.target.value as 'start' | 'end'
+                  setZoomTarget(nextTarget)
+                  zoomTargetRef.current = nextTarget
+                  setViewCenter(nextTarget === 'start' ? props.barStartSec : props.barEndSec)
+                }}
+                style={{ fontSize: 11, padding: '2px 5px' }}
+              >
+                <option value="start">Start</option>
+                <option value="end">End</option>
+              </select>
+            </label>}
           <button className="secondary bwe-nudge" title="Zoom out" onClick={(e) => { e.stopPropagation(); setZoomLevel((z) => Math.max(0.25, z / 2)); setViewCenter(zoomTargetRef.current === 'start' ? props.barStartSec : props.barEndSec) }}>−</button>
           <span className="bwe-ctrl-label" style={{ minWidth: 38, textAlign: 'center' }}>
-            {zoomLevel < 1 ? `1/${Math.round(1 / zoomLevel)}×` : `${zoomLevel}×`}
+            {zoomLevel < 1 ? `1/${Math.round(1 / zoomLevel)}×` : `${zoomLevel.toFixed(2)}×`}
           </span>
-          <button className="secondary bwe-nudge" title="Zoom in" onClick={(e) => { e.stopPropagation(); setZoomLevel((z) => Math.min(16, z * 2)); setViewCenter(zoomTargetRef.current === 'start' ? props.barStartSec : props.barEndSec) }}>+</button>
+          <button className="secondary bwe-nudge" title="Zoom in" onClick={(e) => { e.stopPropagation(); setZoomLevel((z) => Math.min(32, z * 2)); setViewCenter(zoomTargetRef.current === 'start' ? props.barStartSec : props.barEndSec) }}>+</button>
         </div>
       </div>
 

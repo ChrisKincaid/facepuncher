@@ -9,6 +9,9 @@ interface Props {
   totalDuration: number
   bars: Bar[]
   currentBarIndex: number
+  loopEnabled: boolean
+  loopRange?: { start: number; end: number }
+  onLoopRangeChange: (start: number, end: number) => void
   onSeek: (time: number) => void
 }
 
@@ -29,6 +32,9 @@ export function HorizontalWaveformDetail({
   totalDuration,
   bars,
   currentBarIndex,
+  loopEnabled,
+  loopRange,
+  onLoopRangeChange,
   onSeek,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -48,6 +54,8 @@ export function HorizontalWaveformDetail({
   const isPlayingRef = useRef(isPlaying)
   const barsRef = useRef(bars)
   const currentBarIndexRef = useRef(currentBarIndex)
+  const loopEnabledRef = useRef(loopEnabled)
+  const loopRangeRef = useRef(loopRange)
   const totalDurationRef = useRef(totalDuration)
   useLayoutEffect(() => {
     zoomRef.current = zoom
@@ -57,15 +65,21 @@ export function HorizontalWaveformDetail({
     isPlayingRef.current = isPlaying
     barsRef.current = bars
     currentBarIndexRef.current = currentBarIndex
+    loopEnabledRef.current = loopEnabled
+    loopRangeRef.current = loopRange
     totalDurationRef.current = totalDuration
-  }, [bars, currentBarIndex, cursor, isPlaying, playhead, totalDuration, viewCenter, zoom])
+  }, [bars, currentBarIndex, cursor, isPlaying, loopEnabled, loopRange, playhead, totalDuration, viewCenter, zoom])
 
   // DPR ref for draw function
   const dprRef = useRef(1)
 
-  // Drag state
-  const dragRef = useRef<{ startX: number; startCenter: number } | null>(null)
-  const playheadDragRef = useRef<{ startX: number; startTime: number } | null>(null)
+  const pointerDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startTime: number
+    mode: 'select' | 'start-handle' | 'end-handle' | 'playhead'
+    moved: boolean
+  } | null>(null)
   const hoverXRef = useRef<number | null>(null)  // mouse X for hover line
 
   /** Get visible time window */
@@ -115,6 +129,8 @@ export function HorizontalWaveformDetail({
 
     const _bars = barsRef.current
     const _currentBarIndex = currentBarIndexRef.current
+    const _loopEnabled = loopEnabledRef.current
+    const _loopRange = loopRangeRef.current
     const _playhead = playheadRef.current
     const _cursor = cursorRef.current
     const _isPlaying = isPlayingRef.current
@@ -240,6 +256,21 @@ export function HorizontalWaveformDetail({
             ctx.fillRect(px, midY - peakH, 1, peakH * 0.4)
           }
         }
+      }
+    }
+
+    if (_loopEnabled) {
+      const loopStart = _loopRange ? _bars[_loopRange.start]?.startSec ?? 0 : 0
+      const loopEnd = _loopRange ? _bars[_loopRange.end]?.endSec ?? _dur : _dur
+      const x1 = Math.max(0, ((loopStart - vs) / span) * w)
+      const x2 = Math.min(w, ((loopEnd - vs) / span) * w)
+      if (x2 > x1) {
+        ctx.fillStyle = 'rgba(77,208,225,0.2)'
+        ctx.fillRect(x1, 0, x2 - x1, h)
+
+        ctx.fillStyle = '#4dd0e1'
+        ctx.fillRect(Math.round(x1) - 1, 0, 3, h)
+        ctx.fillRect(Math.round(x2) - 1, 0, 3, h)
       }
     }
 
@@ -376,7 +407,7 @@ export function HorizontalWaveformDetail({
   // Redraw before the browser paints so stop/seek never shows the prior marker.
   useLayoutEffect(() => {
     draw()
-  }, [playhead, cursor, isPlaying, bars, currentBarIndex, totalDuration, zoom, viewCenter, draw])
+  }, [playhead, cursor, isPlaying, bars, currentBarIndex, loopEnabled, loopRange, totalDuration, zoom, viewCenter, draw])
 
   /** Convert canvas X to time */
   const xToTime = useCallback((clientX: number): number => {
@@ -408,6 +439,52 @@ export function HorizontalWaveformDetail({
     return Math.abs(clientX - phX) < 8
   }, [totalDuration])
 
+  const nearestBoundary = useCallback((time: number): number => {
+    if (!bars.length) return 0
+    let closest = 0
+    let smallestDistance = Math.abs(time - bars[0].startSec)
+    for (let index = 1; index < bars.length; index++) {
+      const distance = Math.abs(time - bars[index].startSec)
+      if (distance < smallestDistance) {
+        closest = index
+        smallestDistance = distance
+      }
+    }
+    const finalBoundary = bars.length
+    const finalDistance = Math.abs(time - bars[bars.length - 1].endSec)
+    return finalDistance < smallestDistance ? finalBoundary : closest
+  }, [bars])
+
+  const loopBounds = useCallback(() => {
+    if (!bars.length) return undefined
+    const start = loopRange?.start ?? 0
+    const end = loopRange?.end ?? bars.length - 1
+    return { start: Math.max(0, Math.min(start, bars.length - 1)), end: Math.max(0, Math.min(end, bars.length - 1)) }
+  }, [bars.length, loopRange])
+
+  const getLoopHandleAt = useCallback((clientX: number): 'start' | 'end' | undefined => {
+    const canvas = canvasRef.current
+    const bounds = loopBounds()
+    if (!canvas || !bounds) return undefined
+    const rect = canvas.getBoundingClientRect()
+    const { vs, ve } = getView()
+    const span = Math.max(ve - vs, 0.001)
+    const startX = ((bars[bounds.start].startSec - vs) / span) * rect.width + rect.left
+    const endX = ((bars[bounds.end].endSec - vs) / span) * rect.width + rect.left
+    if (Math.abs(clientX - startX) <= 10) return 'start'
+    if (Math.abs(clientX - endX) <= 10) return 'end'
+    return undefined
+  }, [bars, loopBounds])
+
+  const setLoopFromBoundaries = useCallback((first: number, second: number) => {
+    if (!bars.length) return
+    const low = Math.min(first, second)
+    const high = Math.max(first, second)
+    const start = Math.min(low, bars.length - 1)
+    const end = Math.max(start, Math.min(high - 1, bars.length - 1))
+    onLoopRangeChange(start, end)
+  }, [bars.length, onLoopRangeChange])
+
   // Scroll wheel zoom — smooth, centered on mouse position
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault()
@@ -424,81 +501,55 @@ export function HorizontalWaveformDetail({
     }
   }
 
-  // Mouse down: start playhead drag or pan drag
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0) return
-    if (isNearPlayhead(e.clientX)) {
-      // Drag the play position marker — relative, delta-based
-      e.preventDefault()
-      playheadDragRef.current = { startX: e.clientX, startTime: playheadRef.current }
-      const onMove = (me: MouseEvent) => {
-        if (!playheadDragRef.current) return
-        const canvas = canvasRef.current
-        if (!canvas) return
-        const rect = canvas.getBoundingClientRect()
-        const dx = me.clientX - playheadDragRef.current.startX
-        const { vs, ve } = getView()
-        const span = ve - vs
-        const timeDelta = (dx / rect.width) * span
-        const newTime = Math.max(0, Math.min(totalDuration, playheadDragRef.current.startTime + timeDelta))
-        onSeek(newTime)
-      }
-      const onUp = () => {
-        playheadDragRef.current = null
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
-    } else if (zoom > 1) {
-      // Pan drag
-      e.preventDefault()
-      dragRef.current = { startX: e.clientX, startCenter: viewCenter }
-      const onMove = (me: MouseEvent) => {
-        if (!dragRef.current) return
-        const canvas = canvasRef.current
-        if (!canvas) return
-        const rect = canvas.getBoundingClientRect()
-        const dx = me.clientX - dragRef.current.startX
-        const span = totalDuration / zoom
-        const timeDelta = -(dx / rect.width) * span
-        const newCenter = dragRef.current.startCenter + timeDelta
-        setViewCenter(Math.max(0, Math.min(totalDuration, newCenter)))
-      }
-      const onUp = () => {
-        dragRef.current = null
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    const handle = getLoopHandleAt(e.clientX)
+    pointerDragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startTime: xToTime(e.clientX),
+      mode: handle === 'start' ? 'start-handle' : handle === 'end' ? 'end-handle' : isNearPlayhead(e.clientX) ? 'playhead' : 'select',
+      moved: false,
     }
+    e.currentTarget.setPointerCapture(e.pointerId)
   }
 
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (playheadDragRef.current || dragRef.current) return
-    const t = xToTime(e.clientX)
-    onSeek(t)
-  }
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return
+    const drag = pointerDragRef.current
+    if (drag?.pointerId === e.pointerId) {
+      if (Math.abs(e.clientX - drag.startX) > 4) drag.moved = true
+      if (drag.moved) {
+        const boundary = nearestBoundary(xToTime(e.clientX))
+        if (drag.mode === 'playhead') onSeek(xToTime(e.clientX))
+        else if (drag.mode === 'select') setLoopFromBoundaries(nearestBoundary(drag.startTime), boundary)
+        else {
+          const bounds = loopBounds()
+          if (bounds) {
+            if (drag.mode === 'start-handle') onLoopRangeChange(Math.min(boundary, bounds.end), bounds.end)
+            else onLoopRangeChange(bounds.start, Math.max(bounds.start, boundary - 1))
+          }
+        }
+      }
+    }
     // Update hover line position (in buffer px)
     const rect = canvas.getBoundingClientRect()
-    const dpr = dprRef.current
-    hoverXRef.current = (e.clientX - rect.left) / rect.width * canvas.width / dpr * dpr
-    // Actually just store as buffer pixels
     hoverXRef.current = ((e.clientX - rect.left) / rect.width) * canvas.width
     draw()
 
-    if (isNearPlayhead(e.clientX)) {
+    if (getLoopHandleAt(e.clientX) || isNearPlayhead(e.clientX)) {
       canvas.style.cursor = 'ew-resize'
-    } else if (zoom > 1) {
-      canvas.style.cursor = 'grab'
     } else {
       canvas.style.cursor = 'crosshair'
     }
+  }
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = pointerDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    pointerDragRef.current = null
+    if (!drag.moved) onSeek(xToTime(e.clientX))
   }
 
   const handleMouseLeave = () => {
@@ -511,12 +562,13 @@ export function HorizontalWaveformDetail({
       <canvas
         ref={canvasRef}
         onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onClick={handleClick}
-        onMouseMove={handleMouseMove}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={() => { pointerDragRef.current = null }}
         onMouseLeave={handleMouseLeave}
-        title="Click to set play position · drag gold marker to move it · scroll to zoom · drag to pan"
-        style={{ display: 'block', width: '100%', height: '100%' }}
+        title="Click to set play position · drag to set loop range · drag cyan handles to adjust loop bounds"
+        style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
       />
     </div>
   )

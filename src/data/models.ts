@@ -9,6 +9,7 @@ export interface Project {
     durationSec: number
     bpm: number
     offsetSec?: number
+    bar1AnchorTime?: number
     timeSig: { beatsPerBar: number; beatUnit: number }
   }
   bars: Bar[]
@@ -37,7 +38,6 @@ export interface Take {
 export interface MixSettings {
   masterBeatGain: number
   globalVocalGain: number
-  barGains: Record<number, number>
 }
 
 export interface PlaybackState {

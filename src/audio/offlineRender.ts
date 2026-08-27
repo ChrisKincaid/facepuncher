@@ -37,8 +37,7 @@ export async function renderOffline(req: RenderRequest) {
     const src = ctx.createBufferSource()
     src.buffer = take.buffer
     const takeGain = ctx.createGain()
-    const perBar = take.barIndex !== undefined ? req.mix.barGains?.[take.barIndex] ?? 1 : 1
-    takeGain.gain.value = take.gain * (req.mix.globalVocalGain ?? 1) * perBar
+    takeGain.gain.value = take.gain * (req.mix.globalVocalGain ?? 1)
     src.connect(takeGain).connect(ctx.destination)
     src.start(Math.max(0, take.startSec + (req.vocalSyncMs ?? 0) / 1000))
   })

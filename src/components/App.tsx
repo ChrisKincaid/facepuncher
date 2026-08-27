@@ -3,8 +3,9 @@ import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { Mixer } from './Mixer'
 import { ExportDialog } from './ExportDialog'
 import { BarList } from './BarList'
+import { BarWaveformEditor } from './BarWaveformEditor'
 import { useStore } from '../state/store'
-import { generateBars, updateBarPosition } from '../analysis/bpmGrid'
+import { generateBars } from '../analysis/bpmGrid'
 import { estimateBpmFromBuffer } from '../analysis/onsetEstimate'
 import { formatTime } from '../utils/time'
 import { audioEngine } from '../audio/audioEngine'
@@ -13,8 +14,6 @@ import { encodeWavFromAudioBuffer } from '../audio/wav'
 import { deleteBlob, getBlob, listProjects, putBlob, saveProject } from '../data/storage'
 import type { Take } from '../data/models'
 
-const DEFAULT_LOOP_END_INDEX = 15
-
 export default function App() {
   const {
     project,
@@ -22,14 +21,17 @@ export default function App() {
     isRecording,
     isVocalMuted,
     armedTakeByBar,
+    loopRange,
     audioUrl,
     setBeatMeta,
+    setBar1AnchorTime,
     setBars,
     setAudioUrl,
     setBeatFile,
     setCurrentBar,
     setRecording,
     setVocalMuted,
+    setLoopRange,
     setLatencyOffset,
     armTake,
     disarmTake,
@@ -38,6 +40,7 @@ export default function App() {
     selectTake,
     clearTakeSelection,
     deleteTake,
+    restoreTake,
     deleteAllTakes,
     toggleTakeLock,
     setTakeGain,
@@ -76,17 +79,24 @@ export default function App() {
   const [monitorEnabled, setMonitorEnabled] = useState(false)
   const [monitorGain, setMonitorGain] = useState(0.8)
   const [detectBusy, setDetectBusy] = useState(false)
+  const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
   const [showImportHelp, setShowImportHelp] = useState(false)
-  const [showPlaybackSync, setShowPlaybackSync] = useState(true)
-  const [showMixer, setShowMixer] = useState(true)
+  const [showSetup, setShowSetup] = useState(true)
   // Firefox's AudioWorklet delivers empty input on some render quanta during sustained loud
   // input, silently corrupting recordings — confirmed unfixable from JS; recommend Chromium.
   const [showBrowserWarning, setShowBrowserWarning] = useState(() => /firefox/i.test(navigator.userAgent))
-  const [loopRange, setLoopRange] = useState<{ start: number; end: number } | undefined>(undefined)
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [waveformResetKey, setWaveformResetKey] = useState(0)
   const [activeBarPlayback, setActiveBarPlayback] = useState<{ barIndex: number; mode: 'play' | 'loop' } | undefined>(undefined)
+  const [auditioningTakeId, setAuditioningTakeId] = useState<string | undefined>(undefined)
+  const auditionTimer = useRef<number | null>(null)
+  const [undoToast, setUndoToast] = useState<{ take: Take; index: number } | null>(null)
+  const undoTimer = useRef<number | null>(null)
+  const pendingUndoRef = useRef<{ take: Take; index: number } | null>(null)
   const manualOffsetRef = useRef(false)
+  const manualBpmRef = useRef(false)
+  const tapTimesRef = useRef<number[]>([])
+  const bar1AnchorRef = useRef<number | undefined>(project.beat.bar1AnchorTime)
 
   const totalDuration = useMemo(
     () => project.beat.durationSec || project.bars[project.bars.length - 1]?.endSec || 0,
@@ -97,6 +107,14 @@ export default function App() {
   useEffect(() => {
     vocalSyncMsRef.current = project.latencyOffsetMs
   }, [project.latencyOffsetMs])
+
+  useEffect(() => {
+    setBpmInput(project.beat.bpm ? String(project.beat.bpm) : '')
+  }, [project.beat.bpm])
+
+  useEffect(() => {
+    bar1AnchorRef.current = project.beat.bar1AnchorTime
+  }, [project.beat.bar1AnchorTime])
 
   useEffect(() => {
     saveProject(project).catch((err) => console.error('autosave failed', err))
@@ -193,6 +211,11 @@ export default function App() {
     }
     if (loopEnabled && loopRange && project.bars[loopRange.start] && project.bars[loopRange.end]) {
       audioEngine.setLoop(project.bars[loopRange.start].startSec, project.bars[loopRange.end].endSec)
+      if (isPlayingRef.current) {
+        const position = audioEngine.currentTime
+        previousAudioTimeRef.current = position
+        setCursor(position)
+      }
       return
     }
     audioEngine.setLoop(undefined, undefined)
@@ -254,7 +277,9 @@ export default function App() {
       blobCache.current.set(fileId, file)
       void putBlob(fileId, file)
       manualOffsetRef.current = false
-      setBeatMeta({ fileId, durationSec: meta.durationSec, bpm: project.beat.bpm, timeSig: project.beat.timeSig, offsetSec: 0 })
+      manualBpmRef.current = false
+      bar1AnchorRef.current = undefined
+      setBeatMeta({ fileId, durationSec: meta.durationSec, bpm: project.beat.bpm, timeSig: project.beat.timeSig, offsetSec: 0, bar1AnchorTime: undefined })
       setBars([])
       // Loading audio does not create a grid or move the transport.
       setPlayhead(0)
@@ -271,41 +296,83 @@ export default function App() {
   const handleAutoDetectBars = async () => {
     const buf = audioEngine.beatAudioBuffer
     if (!buf || !project.beat.durationSec) return
+    const existingAnchor = bar1AnchorRef.current ?? project.beat.bar1AnchorTime
     setDetectBusy(true)
-    const detected = await estimateBpmFromBuffer(buf)
+    const detected = await estimateBpmFromBuffer(buf, existingAnchor ?? 0)
     setDetectBusy(false)
     if (!detected) { setStatus('BPM detection failed. Try adjusting manually.'); return }
-    const bpm = Math.round(detected.bpm)
-    const offsetSec = manualOffsetRef.current ? (project.beat.offsetSec ?? 0) : detected.offsetSec
-    setBeatMeta({ ...project.beat, bpm, offsetSec })
-    setBars(generateBars(project.beat.durationSec, bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, offsetSec))
+    const bpm = normalizeBpm(detected.bpm)
+    manualBpmRef.current = false
+    const anchor = existingAnchor ?? detected.offsetSec
+    const offsetSec = anchor
+    bar1AnchorRef.current = anchor
+    setBeatMeta({ ...project.beat, bpm, offsetSec, bar1AnchorTime: anchor })
+    setBars(generateBars(project.beat.durationSec, bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, offsetSec, anchor))
     setStatus(`Auto-detected bars at ${bpm} BPM, offset ${offsetSec.toFixed(3)}s (${Math.round(detected.confidence * 100)}% confidence).`)
   }
 
+  const normalizeBpm = (bpm: number) => {
+    const rounded = Math.round(bpm * 10) / 10
+    return Math.max(50, Math.min(300, rounded < 50 ? rounded * 2 : rounded))
+  }
+
   const applyBpm = (bpm: number) => {
-    const clamped = Math.max(40, Math.min(240, Math.round(bpm * 2) / 2))
-    setBeatMeta({ ...project.beat, bpm: clamped })
+    const clamped = normalizeBpm(bpm)
+    const anchor = bar1AnchorRef.current ?? project.bars[0]?.startSec ?? project.beat.bar1AnchorTime
+    bar1AnchorRef.current = anchor
+    setBeatMeta({ ...project.beat, bpm: clamped, bar1AnchorTime: anchor })
     if (project.beat.durationSec && project.bars.length) {
-      setBars(generateBars(project.beat.durationSec, clamped, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, project.beat.offsetSec ?? 0))
+      setBars(generateBars(project.beat.durationSec, clamped, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, project.beat.offsetSec ?? 0, anchor))
     }
   }
 
-  const handleBarUpdate = useCallback(
-    (index: number, start: number, end: number, allowGaps: boolean) => {
-      setBars(updateBarPosition(project.bars, index, start, end, allowGaps))
-    },
-    [project.bars, setBars],
-  )
+  const handleBpmInput = (value: string) => {
+    setBpmInput(value)
+    const bpm = Number(value)
+    if (!value || !Number.isFinite(bpm) || bpm > 300) return
+    manualBpmRef.current = true
+    applyBpm(bpm)
+  }
+
+  const commitBpmInput = () => {
+    const bpm = Number(bpmInput)
+    if (!Number.isFinite(bpm)) {
+      setBpmInput(project.beat.bpm ? String(project.beat.bpm) : '')
+      return
+    }
+    manualBpmRef.current = true
+    applyBpm(bpm)
+  }
+
+  const handleTapTempo = () => {
+    const now = performance.now()
+    const taps = tapTimesRef.current
+    const previousTap = taps[taps.length - 1]
+    const nextTaps = previousTap && now - previousTap > 2000 ? [now] : [...taps, now].slice(-6)
+    tapTimesRef.current = nextTaps
+    if (nextTaps.length < 2) return
+    const intervals = nextTaps.slice(1).map((time, index) => time - nextTaps[index])
+    const averageInterval = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length
+    const bpm = 60000 / averageInterval
+    if (bpm > 300) return
+    manualBpmRef.current = true
+    setBpmInput(String(Math.round(bpm * 10) / 10))
+    applyBpm(bpm)
+  }
 
   useEffect(() => {
-    if (!project.bars.length) { setLoopRange(undefined); return }
-    setLoopRange((prev) => {
-      if (!prev) return { start: 0, end: Math.min(DEFAULT_LOOP_END_INDEX, project.bars.length - 1) }
-      const start = Math.min(prev.start, project.bars.length - 1)
-      const end = Math.min(Math.max(prev.end, start), project.bars.length - 1)
-      return { start, end }
-    })
-  }, [project.bars.length])
+    if (!project.bars.length) {
+      setLoopRange(undefined)
+      return
+    }
+    if (!loopRange) {
+      setLoopRange({ start: 0, end: project.bars.length - 1 })
+      return
+    }
+    const start = Math.min(loopRange.start, project.bars.length - 1)
+    const end = Math.min(Math.max(loopRange.end, start), project.bars.length - 1)
+    if (start !== loopRange.start || end !== loopRange.end) setLoopRange({ start, end })
+  }, [loopRange, project.bars.length, setLoopRange])
 
   const handleSeek = useCallback(
     (time: number) => {
@@ -321,11 +388,23 @@ export default function App() {
   const applyOffset = useCallback((offsetSec: number) => {
     const clamped = Math.max(0, Math.min(offsetSec, totalDuration))
     manualOffsetRef.current = true
-    setBeatMeta({ ...project.beat, offsetSec: clamped })
+    const anchor = bar1AnchorRef.current ?? project.bars[0]?.startSec ?? project.beat.bar1AnchorTime
+    bar1AnchorRef.current = anchor
+    setBeatMeta({ ...project.beat, offsetSec: clamped, bar1AnchorTime: anchor })
     if (project.beat.durationSec && project.bars.length) {
-      setBars(generateBars(project.beat.durationSec, project.beat.bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, clamped))
+      setBars(generateBars(project.beat.durationSec, project.beat.bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, clamped, anchor))
     }
-  }, [project.beat, setBeatMeta, setBars, totalDuration])
+  }, [project.beat, project.bars, setBeatMeta, setBars, totalDuration])
+
+  const setBar1Anchor = useCallback((timeSec: number) => {
+    const anchor = Math.max(0, Math.min(timeSec, totalDuration))
+    manualOffsetRef.current = true
+    bar1AnchorRef.current = anchor
+    setBar1AnchorTime(anchor)
+    if (project.beat.durationSec && project.bars.length) {
+      setBars(generateBars(project.beat.durationSec, project.beat.bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, anchor, anchor))
+    }
+  }, [project.beat, setBar1AnchorTime, setBars, totalDuration])
 
   const handlePlay = useCallback(() => {
     if (!audioLoaded) return
@@ -388,11 +467,19 @@ export default function App() {
     setLoopRange({ start: clampedStart, end: clampedEnd })
   }
 
+  const handleLoopStartChange = (start: number) => {
+    handleLoopChange(start, Math.max(start, loopRange?.end ?? start))
+  }
+
+  const handleLoopEndChange = (end: number) => {
+    handleLoopChange(Math.min(loopRange?.start ?? end, end), end)
+  }
+
   const handleScrub = (value: number) => {
     if (!audioLoaded || !totalDuration) return
     const clamped = Math.min(Math.max(value, 0), totalDuration)
     if (loopRange && (clamped < project.bars[loopRange.start]?.startSec || clamped > project.bars[loopRange.end]?.endSec)) {
-      setLoopRange({ start: 0, end: Math.min(DEFAULT_LOOP_END_INDEX, project.bars.length - 1) })
+      setLoopRange({ start: 0, end: project.bars.length - 1 })
     }
     handleSeek(clamped)
   }
@@ -506,8 +593,7 @@ export default function App() {
       audioEngine.stopTake()
       return undefined
     }
-    const perBar = project.mix.barGains?.[barIndex] ?? 1
-    const gainValue = take.gain * perBar
+    const gainValue = take.gain
     // Reactive bar-entry detection can notice the boundary a few ms late — measure that lag
     // directly (position now vs. the bar's true start) and skip into the take by that amount
     // so it lines up on its own. The manual sync slider still layers on top for any residual
@@ -586,14 +672,13 @@ export default function App() {
       // than schedule audio for a session that's no longer current.
       if (!isPlayingRef.current || recordingActiveRef.current) return
       const nextStartAt = startAt + (nextBar.startSec - bar.startSec)
-      const perBar = project.mix.barGains?.[nextIndex] ?? 1
-      const gainValue = take.gain * perBar
+      const gainValue = take.gain
       audioEngine.scheduleTakeAt(buffer, nextIndex, nextStartAt, gainValue)
       chainedThroughBarRef.current = Math.max(chainedThroughBarRef.current, nextIndex)
       barIndex = nextIndex
       startAt = nextStartAt
     }
-  }, [armedTakeByBar, loopEnabled, loopRange, project.bars, project.mix.barGains, project.takes])
+  }, [armedTakeByBar, loopEnabled, loopRange, project.bars, project.takes])
 
 
   function logBufferRegions(tag: string, barIndex: number, takeId: string, buffer: AudioBuffer) {
@@ -636,7 +721,6 @@ export default function App() {
       const buffer = await ctx.decodeAudioData(await blob.arrayBuffer())
       decodedTakeCache.current.set(take.takeId, buffer)
       if (request !== takePlaybackRequestRef.current || syncGeneration !== syncGenerationRef.current || !isPlayingRef.current || recordingActiveRef.current) return
-      const perBar = project.mix.barGains?.[barIndex] ?? 1
       const bar = project.bars[barIndex]
       const position = currentPositionSec ?? (bar?.startSec ?? 0)
       const targetStart = (bar?.startSec ?? 0) + syncSec
@@ -651,31 +735,107 @@ export default function App() {
         adjustedOffset,
         playbackDelay,
       })
-      audioEngine.playTake(buffer, adjustedOffset, take.gain * perBar, playbackDelay)
+      audioEngine.playTake(buffer, adjustedOffset, take.gain, playbackDelay)
     } catch (err) {
       console.error('selected take playback failed', err)
     }
   }
 
-  async function listenToTake(barIndex: number, takeId: string) {
-    const take = project.takes.find((item) => item.barIndex === barIndex && item.takeId === takeId)
-    if (!take) return
-    const blob = blobCache.current.get(take.fileId)
-    if (!blob) {
-      setStatus('This take audio is unavailable.')
+  // Changing a bar's take mid-playback must change what is heard on the current pass rather
+  // than at the next loop wrap, so retarget the live vocal source right away.
+  const applyLiveTakeChange = (barIndex: number, takeId?: string) => {
+    audioEngine.cancelChainedForBar(barIndex)
+    chainedThroughBarRef.current = -1
+    if (!isPlayingRef.current || recordingActiveRef.current) return
+    const bar = project.bars[barIndex]
+    const position = audioEngine.currentTime
+    if (!bar || position < bar.startSec || position >= bar.endSec) return
+    if (!takeId) {
+      audioEngine.stopTake(0.008)
       return
     }
-    try {
-      const ctx = await audioEngine.ensureContext()
-      const buffer = decodedTakeCache.current.get(take.takeId) ?? await ctx.decodeAudioData(await blob.arrayBuffer())
-      decodedTakeCache.current.set(take.takeId, buffer)
-      logBufferRegions('LISTEN button', barIndex, take.takeId, buffer)
-      audioEngine.playTake(buffer, 0, take.gain * (project.mix.barGains?.[barIndex] ?? 1))
-      setStatus(`Listening to Take ${project.takes.filter((item) => item.barIndex === barIndex).findIndex((item) => item.takeId === takeId) + 1} for Bar ${barIndex + 1}.`)
-    } catch (err) {
-      console.error('direct take listen failed', err)
-      setStatus('This take could not be decoded for playback.')
+    const take = project.takes.find((item) => item.takeId === takeId)
+    if (take) void playSelectedTake(barIndex, 0, vocalSyncMsRef.current / 1000, position, take)
+  }
+
+  const handleSelectTake = (barIndex: number, takeId: string) => {
+    selectTake(barIndex, takeId)
+    applyLiveTakeChange(barIndex, takeId)
+  }
+
+  // Second click on an already-selected slot: solo the take on its own so it can be judged
+  // in isolation, without touching the beat transport or the bar's grid selection.
+  const handleAuditionTake = async (takeId: string) => {
+    const take = project.takes.find((item) => item.takeId === takeId)
+    if (!take) return
+    let buffer = decodedTakeCache.current.get(takeId)
+    if (!buffer) {
+      const blob = blobCache.current.get(take.fileId)
+      if (!blob) return
+      try {
+        const ctx = await audioEngine.ensureContext()
+        buffer = await ctx.decodeAudioData(await blob.arrayBuffer())
+        decodedTakeCache.current.set(takeId, buffer)
+      } catch (err) {
+        console.error('take audition decode failed', err)
+        return
+      }
     }
+    if (auditionTimer.current) window.clearTimeout(auditionTimer.current)
+    audioEngine.playTakeFromStart(buffer, take.gain)
+    setAuditioningTakeId(takeId)
+    auditionTimer.current = window.setTimeout(() => {
+      auditionTimer.current = null
+      setAuditioningTakeId(undefined)
+    }, buffer.duration * 1000)
+  }
+
+  const handleSelectNoTake = (barIndex: number) => {
+    clearTakeSelection(barIndex)
+    applyLiveTakeChange(barIndex, undefined)
+  }
+
+  // Purges a deleted take's audio for good. Deferred until the undo window closes so an
+  // undo can restore the take from the still-warm caches instead of re-reading storage.
+  const purgeTake = (take: Take) => {
+    decodedTakeCache.current.delete(take.takeId)
+    blobCache.current.delete(take.fileId)
+    void deleteBlob(take.fileId)
+  }
+
+  const handleDeleteTake = (takeId: string) => {
+    const index = project.takes.findIndex((item) => item.takeId === takeId)
+    const target = project.takes[index]
+    if (!target || target.locked) return
+    deleteTake(takeId)
+    if (undoTimer.current) {
+      window.clearTimeout(undoTimer.current)
+      if (pendingUndoRef.current) purgeTake(pendingUndoRef.current.take)
+    }
+    pendingUndoRef.current = { take: target, index }
+    setUndoToast({ take: target, index })
+    undoTimer.current = window.setTimeout(() => {
+      undoTimer.current = null
+      pendingUndoRef.current = null
+      purgeTake(target)
+      setUndoToast(null)
+    }, 5000)
+    // A remaining take may have been auto-selected in its place, so resolve what should
+    // now be audible for this bar instead of assuming silence.
+    const replacement = project.takes.find((item) => item.barIndex === target.barIndex && item.takeId !== takeId)
+    if (target.selected) applyLiveTakeChange(target.barIndex, replacement?.takeId)
+    else audioEngine.cancelChainedForBar(target.barIndex)
+  }
+
+  const handleUndoDelete = () => {
+    const pending = pendingUndoRef.current
+    if (!pending) return
+    if (undoTimer.current) window.clearTimeout(undoTimer.current)
+    undoTimer.current = null
+    pendingUndoRef.current = null
+    restoreTake(pending.take, pending.index)
+    setUndoToast(null)
+    if (pending.take.selected) applyLiveTakeChange(pending.take.barIndex, pending.take.takeId)
   }
 
   const handleDeleteAllTakes = () => {
@@ -866,7 +1026,8 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      <div className="top-nav">
+      <div className="header-stack">
+        <div className="top-nav">
         <div className="nav-scrub">
           <input
             type="range"
@@ -888,6 +1049,9 @@ export default function App() {
               totalDuration={totalDuration}
               bars={project.bars}
               currentBarIndex={currentBarIndex}
+              loopEnabled={loopEnabled}
+              loopRange={loopRange}
+              onLoopRangeChange={handleLoopChange}
               onSeek={handleSeek}
             />
             <div className="waveform-time-overlay">
@@ -916,9 +1080,9 @@ export default function App() {
             </div>
           </div>
         </div>
-      </div>
+        </div>
 
-      <div className="playback-controls-panel">
+        <div className="playback-controls-panel">
         <div className="playback-play-group">
           <button className="playback-back-button" onClick={() => handleSeek(0)} disabled={!audioLoaded || isRecording} title="Back to start (00:00)">⏮</button>
           <button className="playback-wide-button" onClick={isPlaying ? handlePause : handlePlay} disabled={!audioLoaded} title={isPlaying ? 'Pause — keeps position [Space]' : 'Play from current position [Space]'}>
@@ -933,6 +1097,72 @@ export default function App() {
         >
           {`\u21bb ${loopEnabled ? 'Loop Off' : 'Loop On'}`}{loopRange ? ` \u00b7 Bar ${loopRange.start + 1}-${loopRange.end + 1}` : ''}
         </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!loopRange}
+          onClick={() => document.getElementById(`bar-row-${loopRange?.start ?? 0}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+        >
+          Show Loop
+        </button>
+        <label className="loop-range-select">
+          <span>Loop Start</span>
+          <select
+            value={loopRange?.start ?? ''}
+            disabled={!project.bars.length}
+            onChange={(event) => handleLoopStartChange(Number(event.target.value))}
+          >
+            {project.bars.map((bar) => <option key={bar.index} value={bar.index}>Bar {bar.index + 1}</option>)}
+          </select>
+        </label>
+        <label className="loop-range-select">
+          <span>Loop End</span>
+          <select
+            value={loopRange?.end ?? ''}
+            disabled={!project.bars.length}
+            onChange={(event) => handleLoopEndChange(Number(event.target.value))}
+          >
+            {project.bars.map((bar) => <option key={bar.index} value={bar.index}>Bar {bar.index + 1}</option>)}
+          </select>
+        </label>
+        </div>
+
+        <Mixer
+          mix={project.mix}
+          onMasterGain={(v) => updateMix({ masterBeatGain: v })}
+          onGlobalVocalGain={(v) => {
+            audioEngine.setMasterVocalGain(v)
+            updateMix({ globalVocalGain: v })
+          }}
+          isVocalMuted={isVocalMuted}
+          onToggleVocalMute={() => {
+            const nextMuted = !isVocalMuted
+            audioEngine.setMasterVocalMuted(nextMuted)
+            setVocalMuted(nextMuted)
+          }}
+          monitorEnabled={monitorEnabled}
+          monitorGain={monitorGain}
+          takesCount={project.takes.length}
+          onDeleteAllTakes={handleDeleteAllTakes}
+          onToggleMonitor={() => {
+            if (monitorEnabled) {
+              audioEngine.setMonitorGain(0)
+              setMonitorEnabled(false)
+              return
+            }
+            audioEngine
+              .startMicMonitor(monitorGain)
+              .then(() => {
+                audioEngine.setMonitorGain(monitorGain)
+                setMonitorEnabled(true)
+              })
+              .catch((err) => setStatus(`Mic permission failed: ${String(err)}`))
+          }}
+          onMonitorGain={(v) => {
+            setMonitorGain(v)
+            audioEngine.setMonitorGain(v)
+          }}
+        />
       </div>
 
       <div className="app-main">
@@ -957,9 +1187,21 @@ export default function App() {
             </div>
           )}
 
-          <div className="panel">
-            <div className="collapsible-header">
-              <span className="collapsible-title">Import Beat</span>
+          <section className={`setup-stack ${showSetup ? '' : 'setup-stack-collapsed'}`}>
+          <div className="setup-stack-header">
+            <span className="collapsible-title">SETUP</span>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setShowSetup((visible) => !visible)}
+            >
+              {showSetup ? 'Hide Setup' : 'Show Setup'}
+            </button>
+          </div>
+          {showSetup && <>
+          <section className="panel beat-setup-panel">
+            <div className="beat-setup-header">
+              <span className="collapsible-title">BEAT SETUP</span>
               <button
                 className="bwe-help collapsible-corner"
                 type="button"
@@ -973,7 +1215,7 @@ export default function App() {
             {showImportHelp && (
               <div className="bwe-help-text">
                 <strong>File:</strong> upload a WAV or MP3 under 10 minutes long.<br />
-                <strong>BPM:</strong> becomes available after the audio loads. Auto-detect bars estimates it automatically, or you can type an exact value, then use ÷2 / ×2 to correct octave errors.<br />
+                <strong>BPM:</strong> is available in the top transport bar. Auto-detect bars estimates it automatically, or you can set an exact value there.<br />
                 <strong>Offset:</strong> sets where Bar 1 begins, in seconds from the start of the file.<br />
                 <strong>Set Bar 1 here:</strong> sets the offset to the current play position instead of typing a number.
               </div>
@@ -988,19 +1230,26 @@ export default function App() {
               >
                 {detectBusy ? 'Detecting\u2026' : 'Auto-detect bars'}
               </button>
-              <label className="flex-gap">
-                BPM
+              <div className="transport-bpm" onClick={(event) => event.stopPropagation()}>
+                <span>BPM</span>
                 <input
                   type="number"
-                  value={project.beat.bpm}
-                  onChange={(e) => applyBpm(Number(e.target.value) || 0)}
-                  min={40}
-                  max={240}
-                  style={{ width: 72 }}
+                  value={bpmInput}
+                  onChange={(event) => handleBpmInput(event.target.value)}
+                  onBlur={commitBpmInput}
+                  min={30}
+                  max={300}
+                  step={0.1}
+                  aria-label="Global BPM"
                 />
-                <button className="secondary" style={{ padding: '4px 8px', fontSize: 13 }} title="Halve BPM" onClick={() => applyBpm(project.beat.bpm / 2)}>÷2</button>
-                <button className="secondary" style={{ padding: '4px 8px', fontSize: 13 }} title="Double BPM" onClick={() => applyBpm(project.beat.bpm * 2)}>×2</button>
-              </label>
+                <button type="button" className="secondary" title="Halve BPM" onClick={() => applyBpm(project.beat.bpm / 2)}>/2</button>
+                <button type="button" className="secondary" title="Double BPM" onClick={() => applyBpm(project.beat.bpm * 2)}>x2</button>
+                <button type="button" className="secondary" title="Decrease BPM by 1" onClick={() => applyBpm(project.beat.bpm - 1)}>−1</button>
+                <button type="button" className="secondary" title="Decrease BPM by 0.1" onClick={() => applyBpm(project.beat.bpm - 0.1)}>−0.1</button>
+                <button type="button" className="secondary" title="Increase BPM by 0.1" onClick={() => applyBpm(project.beat.bpm + 0.1)}>+0.1</button>
+                <button type="button" className="secondary" title="Increase BPM by 1" onClick={() => applyBpm(project.beat.bpm + 1)}>+1</button>
+                <button type="button" className="secondary" title="Tap repeatedly to set BPM" onClick={handleTapTempo}>Tap</button>
+              </div>
               <label className="flex-gap">
                 Offset
                 <input
@@ -1018,68 +1267,33 @@ export default function App() {
                 disabled={!audioLoaded}
                 onClick={() => {
                   const position = isPlaying ? cursor : playhead
-                  applyOffset(position)
+                  setBar1Anchor(position)
                   setStatus(`Bar 1 set to ${position.toFixed(3)}s. Click Auto-detect bars when ready.`)
                 }}
               >
                 Set Bar 1
               </button>
             </div>
+          <div className="beat-setup-anchor">
+            {audioEngine.beatAudioBuffer && (
+              <BarWaveformEditor
+                audioBuffer={audioEngine.beatAudioBuffer}
+                barStartSec={project.beat.bar1AnchorTime ?? project.bars[0]?.startSec ?? project.beat.offsetSec ?? 0}
+                barEndSec={project.bars[0]?.endSec ?? Math.min(project.beat.durationSec, (project.beat.bar1AnchorTime ?? project.beat.offsetSec ?? 0) + 4)}
+                prevBarEnd={0}
+                nextBarStart={project.beat.durationSec}
+                playhead={displayPos}
+                isPlaying={isPlaying}
+                getPlaybackTime={() => audioEngine.currentTime}
+                anchorOnly
+                onEdgeChange={(startSec) => setBar1Anchor(startSec)}
+              />
+            )}
+            {!audioEngine.beatAudioBuffer && (
+              <span className="text-muted">Load a beat to align Bar 1.</span>
+            )}
           </div>
-
-          <Mixer
-            mix={project.mix}
-            collapsed={!showMixer}
-            onToggleCollapsed={() => setShowMixer((v) => !v)}
-            onMasterGain={(v) => updateMix({ masterBeatGain: v })}
-            onGlobalVocalGain={(v) => {
-              audioEngine.setMasterVocalGain(v)
-              updateMix({ globalVocalGain: v })
-            }}
-            isVocalMuted={isVocalMuted}
-            onToggleVocalMute={() => {
-              const nextMuted = !isVocalMuted
-              audioEngine.setMasterVocalMuted(nextMuted)
-              setVocalMuted(nextMuted)
-            }}
-            monitorEnabled={monitorEnabled}
-            monitorGain={monitorGain}
-            takesCount={project.takes.length}
-            onDeleteAllTakes={handleDeleteAllTakes}
-            onToggleMonitor={() => {
-              if (monitorEnabled) {
-                audioEngine.setMonitorGain(0)
-                setMonitorEnabled(false)
-                return
-              }
-              audioEngine
-                .startMicMonitor(monitorGain)
-                .then(() => {
-                  // The monitor gain node persists once created, so its value
-                  // must be explicitly restored after a mute (gain 0).
-                  audioEngine.setMonitorGain(monitorGain)
-                  setMonitorEnabled(true)
-                })
-                .catch((err) => setStatus(`Mic permission failed: ${String(err)}`))
-            }}
-            onMonitorGain={(v) => {
-              setMonitorGain(v)
-              audioEngine.setMonitorGain(v)
-            }}
-          />
-
-          <div className={`panel ${showPlaybackSync ? '' : 'section-collapsed'}`}>
-            <div className="collapsible-header">
-              <span className="collapsible-title">PLAYBACK SYNC</span>
-              <button
-                className="secondary collapsible-toggle"
-                onClick={() => setShowPlaybackSync((v) => !v)}
-                title={showPlaybackSync ? 'Hide playback sync controls' : 'Show playback sync controls'}
-              >
-                {showPlaybackSync ? '▾ Hide' : '▸ Show'}
-              </button>
-            </div>
-            {showPlaybackSync && (
+          <div className="beat-setup-sync">
               <div className="controls playback-sync-controls">
                 <label className="flex-gap">
                   Shift vocals
@@ -1118,8 +1332,10 @@ export default function App() {
                 </div>
                 <button className="secondary playback-sync-reset" onClick={() => updateGlobalSync(0)}>Reset</button>
               </div>
-            )}
           </div>
+          </section>
+          </>}
+          </section>
 
           <BarList
             bars={project.bars}
@@ -1131,6 +1347,7 @@ export default function App() {
             takes={project.takes}
             armedTakeByBar={armedTakeByBar}
             activeBarPlayback={activeBarPlayback}
+            auditioningTakeId={auditioningTakeId}
             onPlayFromBar={handlePlayFromBar}
             onLoopBar={handleLoopBar}
             onStopBar={handleStop}
@@ -1160,16 +1377,12 @@ export default function App() {
               setStatus(`Take ${slot + 1} armed for Bar ${barIndex + 1}. Press Play or Loop on that bar to record.`)
             }}
             onDisarmTake={disarmTake}
-            onSelectTake={selectTake}
-            onListenTake={listenToTake}
-            onSelectNoTake={clearTakeSelection}
-            onDeleteTake={deleteTake}
+            onSelectTake={handleSelectTake}
+            onAuditionTake={handleAuditionTake}
+            onSelectNoTake={handleSelectNoTake}
+            onDeleteTake={handleDeleteTake}
             onToggleTakeLock={toggleTakeLock}
             onFocusBar={setCurrentBar}
-            onEdgeChange={handleBarUpdate}
-            onLoopChange={handleLoopChange}
-            barGains={project.mix.barGains}
-            onBarGain={(barIdx, v) => updateMix({ barGains: { ...project.mix.barGains, [barIdx]: v } })}
             onTakeGain={setTakeGain}
           />
 
@@ -1182,6 +1395,13 @@ export default function App() {
           />
         </div>
       </div>
+
+      {undoToast && (
+        <div className="undo-toast" role="status">
+          <span>Take deleted</span>
+          <button type="button" className="undo-toast-action" onClick={handleUndoDelete}>Undo</button>
+        </div>
+      )}
     </div>
   )
 }

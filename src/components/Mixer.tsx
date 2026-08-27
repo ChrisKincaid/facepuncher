@@ -3,8 +3,6 @@ import type { MixSettings } from '../data/models'
 
 interface Props {
   mix: MixSettings
-  collapsed: boolean
-  onToggleCollapsed: () => void
   onMasterGain: (value: number) => void
   onGlobalVocalGain: (value: number) => void
   isVocalMuted: boolean
@@ -16,9 +14,6 @@ interface Props {
   takesCount: number
   onDeleteAllTakes: () => void
 }
-
-// Fine step used by the nudge arrows for small precise adjustments.
-const NUDGE_STEP = 0.01
 
 function ChannelStrip({
   label,
@@ -33,73 +28,20 @@ function ChannelStrip({
   onChange: (value: number) => void
   accent?: boolean
 }) {
-  const trackRef = useRef<HTMLDivElement>(null)
-  const pct = Math.round((value / max) * 100)
-  const nudge = (delta: number) => onChange(Math.max(0, Math.min(max, Math.round((value + delta) * 100) / 100)))
-
-  // Faders are driven directly from pointer position within the track —
-  // this avoids the unreliable hit-testing of a CSS-rotated native
-  // <input type="range">, which does not track drag position correctly.
-  const setFromClientY = (clientY: number) => {
-    const track = trackRef.current
-    if (!track) return
-    const rect = track.getBoundingClientRect()
-    const ratio = 1 - (clientY - rect.top) / rect.height
-    const clamped = Math.max(0, Math.min(1, ratio))
-    onChange(Math.round(clamped * max * 100) / 100)
-  }
-
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.currentTarget.setPointerCapture(e.pointerId)
-    setFromClientY(e.clientY)
-  }
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.buttons !== 1) return
-    setFromClientY(e.clientY)
-  }
-
   return (
     <div className="mixer-strip">
-      <div className="mixer-strip-value">{value.toFixed(2)}</div>
-      <button
-        type="button"
-        className="mixer-fader-nudge"
-        title={`Increase ${label}`}
-        aria-label={`Increase ${label}`}
-        onClick={() => nudge(NUDGE_STEP)}
-      >
-        ▲
-      </button>
-      <div
-        ref={trackRef}
-        className="mixer-fader-track"
-        role="slider"
+      <span className="mixer-strip-label">{label}</span>
+      <input
+        className={`mixer-fader-track ${accent ? 'mixer-fader-track-accent' : ''}`}
+        type="range"
         aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={max}
-        aria-valuenow={value}
-        tabIndex={0}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowUp') nudge(NUDGE_STEP)
-          if (e.key === 'ArrowDown') nudge(-NUDGE_STEP)
-        }}
-      >
-        <div className={`mixer-fader-fill ${accent ? 'mixer-fader-fill-accent' : ''}`} style={{ height: `${pct}%` }} />
-      </div>
-      <button
-        type="button"
-        className="mixer-fader-nudge"
-        title={`Decrease ${label}`}
-        aria-label={`Decrease ${label}`}
-        onClick={() => nudge(-NUDGE_STEP)}
-      >
-        ▼
-      </button>
-      <div className="mixer-strip-label">{label}</div>
+        min={0}
+        max={max}
+        step={0.01}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <span className="mixer-strip-value">{value.toFixed(2)}</span>
     </div>
   )
 }
@@ -122,8 +64,6 @@ function MuteButton({ muted, onToggle, label }: { muted: boolean; onToggle: () =
 
 export function Mixer({
   mix,
-  collapsed,
-  onToggleCollapsed,
   onMasterGain,
   onGlobalVocalGain,
   isVocalMuted,
@@ -152,19 +92,11 @@ export function Mixer({
   }
 
   return (
-    <div className={`mixer-rack ${collapsed ? 'section-collapsed' : ''}`}>
-      <div className="collapsible-header">
+    <div className="mixer-rack">
+      <div className="mixer-header">
         <span className="collapsible-title">MIXER</span>
-        <button
-          className="secondary collapsible-toggle"
-          onClick={onToggleCollapsed}
-          title={collapsed ? 'Show mixer' : 'Hide mixer'}
-        >
-          {collapsed ? '▸ Show' : '▾ Hide'}
-        </button>
       </div>
-      {!collapsed && (
-        <div className="mixer-strips">
+      <div className="mixer-strips">
           <div className="mixer-strip-column">
             <ChannelStrip label="Beat Vol" value={mix.masterBeatGain} max={1} onChange={onMasterGain} />
             <MuteButton muted={beatMuted} onToggle={toggleBeatMute} label="Beat" />
@@ -186,8 +118,7 @@ export function Mixer({
           >
             Delete All Takes
           </button>
-        </div>
-      )}
+      </div>
     </div>
   )
 }

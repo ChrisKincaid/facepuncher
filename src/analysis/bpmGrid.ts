@@ -1,10 +1,12 @@
 import type { Bar } from '../data/models'
 import { barDurationSec, clamp } from '../utils/time'
 
-export function generateBars(durationSec: number, bpm: number, beatsPerBar = 4, beatUnit = 4, offsetSec = 0): Bar[] {
+export function generateBars(durationSec: number, bpm: number, beatsPerBar = 4, beatUnit = 4, offsetSec = 0, bar1AnchorTime?: number): Bar[] {
   if (!durationSec || !bpm) return []
   const barLen = barDurationSec(bpm, beatsPerBar, beatUnit)
-  const start = clamp(offsetSec, 0, durationSec)
+  // An established Bar 1 anchor is the immutable grid origin. Offset remains an
+  // editable pre-anchor fallback, but never displaces a locked first boundary.
+  const start = clamp(bar1AnchorTime ?? offsetSec, 0, durationSec)
   const barCount = Math.max(1, Math.ceil((durationSec - start) / barLen))
   const bars: Bar[] = []
   for (let i = 0; i < barCount; i++) {

@@ -28,6 +28,8 @@ export class AudioEngine {
   private recordingActive = false
   private playingOffset = 0
   private playStartedAt = 0
+  private loopPhaseStartedAt = 0
+  private loopPhaseOffset = 0
   private isPlaying = false
   private masterGainValue = 1
   private masterVocalGainValue = 1
@@ -69,6 +71,7 @@ export class AudioEngine {
   }
 
   setLoop(start: number | undefined, end: number | undefined) {
+    const position = this.currentTime
     if (start === undefined || end === undefined) {
       this.loopRegion = undefined
       // If currently playing, disable loop on the live source
@@ -77,6 +80,11 @@ export class AudioEngine {
       }
     } else {
       this.loopRegion = { start, end }
+      const loopLength = end - start
+      this.loopPhaseOffset = loopLength > 0
+        ? position < start || position > end ? start : position
+        : start
+      this.loopPhaseStartedAt = this.ctx?.currentTime ?? 0
       // If currently playing, update the live source immediately — no restart needed
       if (this.beatSource) {
         this.beatSource.loop = true
@@ -118,8 +126,9 @@ export class AudioEngine {
     if (this.loopRegion) {
       const { start, end } = this.loopRegion
       const loopLen = end - start
-      if (raw > end && loopLen > 0) {
-        return start + ((raw - start) % loopLen)
+      if (loopLen > 0) {
+        const phase = this.loopPhaseOffset + (now - this.loopPhaseStartedAt)
+        return phase < start ? phase : start + ((phase - start) % loopLen)
       }
     }
     return raw
@@ -165,6 +174,8 @@ export class AudioEngine {
 
     this.playingOffset = offsetSec
     this.playStartedAt = this.ctx.currentTime
+    this.loopPhaseOffset = offsetSec
+    this.loopPhaseStartedAt = this.ctx.currentTime
     this.isPlaying = true
 
     if (this.loopRegion) {

@@ -765,6 +765,174 @@ Use this format for each update:
 - Blocked: Manual live-audio validation remains.
 - Next: Play selected takes, change Vocal Volume during playback, toggle Vocal Mute off/on, and confirm immediate changes while per-take gain values remain intact.
 
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Removed the redundant per-bar Bar Vol controls and `barGains` state. Live take playback now uses per-take gain through the master vocal bus; offline rendering uses per-take and global vocal gain without a bar multiplier. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual playback and export validation remains.
+- Next: Confirm Bar Vol is absent from all rows, verify Vocal Vol and Take Vol during playback, then export a mix to confirm clean rendered audio.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Moved loop-range boundaries into Zustand and added responsive Loop Start and Loop End selectors to the pinned transport bar. Per-bar loop boundary buttons and markers are removed; existing transport loop timing is unchanged. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual browser loop-range validation remains.
+- Next: Generate 16 bars, select Bar 5 through Bar 8 in the header, enable Loop, and confirm playback repeats only that range while bar rows show no boundary controls.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Changed the fallback loop range to Bar 1 through the final generated bar, rather than Bar 16, and moved the waveform timecode to a compact translucent bottom-left overlay. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual browser loop and waveform validation remains.
+- Next: Load a beat, confirm the bottom-left timecode leaves early waveform peaks visible, enable Loop without changing the default range, and confirm the full generated track repeats seamlessly.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added a cyan semi-transparent loop-region overlay to the top waveform. It follows the Zustand loop boundaries immediately, falls back to the full waveform when no range is present, and draws beneath the playhead cursor. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual browser waveform validation remains.
+- Next: Select Bars 2 through 5 in the header, enable Loop, and confirm the top waveform highlights only that range while the playhead remains visible throughout playback.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added mouse and touch drag loop selection to the top waveform. Selection snaps to bar boundaries, synchronizes the header selectors, and cyan boundary handles allow direct range adjustment; a pointer click without movement still seeks the transport. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual browser gesture validation remains.
+- Next: Drag a middle waveform range, verify snapped header values, adjust both boundary handles, then click once elsewhere to confirm transport seeking still works.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Expanded the app shell and bar list to full width, removed the bar-list height cap and nested scrolling, and returned vertical scrolling to the browser document. The waveform and transport headers remain pinned above the full-width content. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual desktop layout validation remains.
+- Next: Verify bar rows use the available screen width, only the browser scrollbar is present, and document scrolling remains smooth.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Redesigned normal bar rows as fixed 36px control strips with five permanently visible take badges, selected/recorded/armed states, an active-take volume slider, and compact Edit/delete controls. Per-bar Play/Loop, take listen/lock, no-take selection, and boundary editing now live in the Edit drawer. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual dense-layout and control validation remains.
+- Next: Generate 18 bars, verify the compact rows fit the available desktop viewport, select take badges and adjust active Take Vol, then open an Edit drawer and test its Play/Loop controls.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Aligned the pinned transport bar to the explicit waveform-header height and placed it directly beneath the waveform stacking layer. Transport controls remain in one horizontal row. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual sticky-header validation remains.
+- Next: Confirm Play, Loop, and both loop selectors remain fully visible beneath the waveform without clipped top edges.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Set the top waveform stage to an explicit 96px height and derived the sticky transport offset from that header geometry. The dedicated full-width transport row has explicit top padding and horizontal alignment without changing shared page wrappers or transport logic. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual waveform and transport-header validation remains.
+- Next: Load a beat and confirm waveform peaks fill the full canvas height while the Play button and loop selectors render cleanly below it.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Replaced independently positioned waveform and transport header siblings with one sticky flex-column header stack. The waveform has an explicit 112px relative stage and the transport remains a normal-flow full-width row below it with an 8px gap; no transport audio logic changed. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual header layout validation remains.
+- Next: Load a beat and confirm the waveform fills its stage and the transport row sits fully below it with visible spacing.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added AudioContext-based loop phase anchoring so live loop-boundary changes immediately re-anchor the visual cursor without restarting playback. Refactored BPM to a controlled draft input that permits clearing and replacement edits, commits valid 30-300 BPM values to regenerated bars, and lets Auto-detect explicitly replace manual BPM. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual live playback and BPM-input validation remains.
+- Next: Change loop boundaries during playback and confirm the cursor remains locked to the new phase; clear BPM, enter 85, and confirm bar durations update cleanly.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added Show Loop scrolling to the active range start, Tap Tempo using recent click intervals with a two-second idle reset, and subtle visual highlighting for every bar in the active loop range. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual loop navigation and tap-tempo validation remains.
+- Next: Set Bars 4-12 as the loop, scroll away, use Show Loop to return to Bar 4, tap a steady tempo, and confirm the BPM/grid updates while looped rows remain highlighted.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added 0.1 BPM stepping to global tempo inputs and a compact global tempo strip at the top of every expanded Bar Edit drawer. Its input and +/-0.1, +/-1 controls update the single project BPM and regenerate bar durations through the existing global BPM path. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual tempo-control validation remains.
+- Next: Open a Bar Edit drawer, use +0.1, and confirm the global BPM value and regenerated bar boundaries update immediately.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added persisted `bar1AnchorTime` metadata. Set Bar 1 records the exact transport timestamp as the fixed grid origin; BPM, tap tempo, and offset changes regenerate later bars relative to that anchor without moving Bar 1. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual anchor and accordion-grid validation remains.
+- Next: Set Bar 1 on a clear transient, adjust BPM by 0.1 and 10.0 in both directions, and confirm Bar 1 stays fixed while subsequent boundaries expand or contract.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Fixed the first-BPM-edit Bar 1 anchor race. Set Bar 1 now saves the absolute timestamp through a dedicated store action and an immediate ref; every BPM, tap, auto-detect, and offset grid regeneration uses and preserves that ref before React state has re-rendered. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual immediate-edit anchor validation remains.
+- Next: Set Bar 1 on a transient and immediately use a BPM stepper or type a BPM value; confirm the first bar start remains frozen at the saved timestamp.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Made `bar1AnchorTime` an explicit `generateBars` input. The generator now uses it as the authoritative Bar 1 `startSec` and calculates every subsequent start from that anchor plus the current bar duration, eliminating indirect offset fallbacks after an anchor is set. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual anchored-grid validation remains.
+- Next: Set Bar 1 on a transient, change BPM immediately, and confirm the first start timestamp is unchanged while later boundaries accordion around it.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Centralized Bar 1 anchor resolution before every BPM, auto-detect, and offset regeneration. Each path now resolves the immediate ref, restored Bar 1 start, then persisted anchor; it persists that origin before calling `generateBars`, preventing restored projects from falling back to file start. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual restored-grid anchor validation remains.
+- Next: Set or restore Bar 1 on a transient, change BPM by 0.1, and confirm the first bar start remains strictly frozen.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Unified Bar 1 start ownership under `bar1AnchorTime`. Set Bar 1, Auto Detect, and manual Bar 1 edge dragging now immediately update the same anchor before grid regeneration; subsequent BPM changes use it as the sole grid origin. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual end-to-end anchor synchronization validation remains.
+- Next: Set or auto-detect Bar 1, drag Bar 1 Start to a transient, then edit BPM and confirm it remains locked to that manual transient.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Consolidated the single global BPM input, +/-1, +/-0.1, and Tap Tempo controls into the always-visible primary transport bar. Removed duplicate BPM controls from Import Beat and every Bar Edit drawer while retaining the same global project BPM update path. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual transport BPM validation remains.
+- Next: Use the transport BPM input and steppers, then confirm the global grid updates and no lower panel exposes a second BPM input.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Flattened bar controls into the main compact row: Play, Loop, No take, take selectors, active Take Vol, and delete are now inline. Removed the expandable edit drawer from rendering while retaining the BarWaveformEditor component for a future phase, and added a non-interactive low-opacity waveform-energy canvas behind each bar row. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual inline-control and waveform backdrop validation remains.
+- Next: Confirm each row displays controls and waveform energy inline, no drawer opens, and Set Bar 1 plus transport BPM changes retain the anchored continuous grid.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Moved clear-take selection into the permanent take badge cluster as a sixth `None` slot and renamed the per-bar playback action to `Play From`. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual bar-row control validation remains.
+- Next: Confirm every row presents a clean six-button take cluster and the playback action reads Play From.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Confined each bar's low-opacity waveform-energy canvas to its Take Vol slider bounds and added a live vertical marker based on the bar-relative playback position. The slider remains interactive above the canvas. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual slider waveform and marker validation remains.
+- Next: Play through a bar and confirm waveform energy is visible only behind its Take Vol control while the vertical marker moves smoothly across it.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Added a dedicated collapsible Beat Sync / Anchor precision editor for Bar 1. It provides a high-resolution anchor-focused waveform, pointer dragging, deep zoom, and 1 ms, 10 ms, or zero-crossing nudges that directly update `bar1AnchorTime` and regenerate the continuous grid. Lower bar rows remain compact without edit drawers. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual precision-anchor validation remains.
+- Next: Load a beat, zoom into the Bar 1 transient, drag or nudge the anchor, and confirm the full grid updates while lower bars remain compact.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Updated Auto Detect to preserve an existing `bar1AnchorTime`. Detection now analyzes only from that anchor onward, applies the detected BPM to a grid rooted at the same timestamp, and establishes a detected anchor only for previously unanchored projects. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual anchored auto-detect validation remains.
+- Next: Set Bar 1 at 00:05.000, run Auto Detect Bars, and confirm the BPM changes while Bar 1 remains at 00:05.000.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Replaced the temporary Bar 1 waveform component with the original BarWaveformEditor mounted only in Beat Sync / Anchor. Its start-only mode retains the original drag zoom, full zoom range, zero-crossing and precise nudge logic while hiding End, Allow gaps, and Maintain bar length controls. Deleted the temporary duplicate; lower rows remain compact and drawer-free. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual original-editor anchor validation remains.
+- Next: Use the top Beat Sync editor to drag/nudge Bar 1 and confirm its anchor updates while lower rows stay compact.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Combined Import, Beat Sync / Anchor, and Playback Sync into one compact Beat Setup panel with controls above, the full-width anchor editor in the middle, and vocal sync tools below. Converted Mixer into a permanent horizontal strip with side-by-side Beat, Vocal, and Mic sliders plus Delete All Takes, reducing setup-space overhead for the bar grid. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual unified-panel layout validation remains.
+- Next: Confirm Beat Setup contains all import, anchor, and sync tools, Mixer is horizontal beneath it, and the lower bar grid retains the majority of the viewport.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Wrapped Beat Setup and Mixer in one collapsible Setup section, restored /2 and x2 beside the transport BPM controls, and normalized BPM values below 50.0 by automatically doubling them before grid generation. Added Play from Anchor and isolated 1/2/4-bar anchor audition loops that use the AudioEngine without changing global loop bounds. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual setup, BPM-floor, and anchor-audition validation remains.
+- Next: Collapse/expand Setup, enter 49 BPM and confirm 98 BPM is applied, then test anchor playback and a 1-bar audition loop without changing global loop selectors.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Moved all master BPM controls into Beat Setup, including /2 and x2. Raised the top Bar 1 editor zoom ceiling to 32x and added an AudioContext-driven requestAnimationFrame redraw loop for a crisp high-FPS playhead while playback runs. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual high-zoom editor validation remains.
+- Next: Zoom the Bar 1 editor to 32x, use Play from Anchor, and confirm smooth playhead movement while the BPM controls remain in Beat Setup.
+
 ## Priority Order
 1. Browser webapp (highest priority).
 2. VST path.

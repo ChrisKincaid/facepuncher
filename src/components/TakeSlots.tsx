@@ -3,76 +3,91 @@ import type { Take } from '../data/models'
 interface Props {
   takes: Take[]
   armedSlots: number[]
+  noTakeActive: boolean
+  auditioningTakeId?: string
   onArm: (slot: number) => void
   onDisarm: (slot?: number) => void
   onSelect: (takeId: string) => void
-  onListen: (takeId: string) => void
+  onAudition: (takeId: string) => void
   onSelectNone: () => void
   onDelete: (takeId: string) => void
   onToggleLock: (takeId: string) => void
 }
 
-export function TakeSlots({ takes, armedSlots, onArm, onDisarm, onSelect, onListen, onSelectNone, onDelete, onToggleLock }: Props) {
-  const slotCount = Math.min(5, Math.max(1, takes.length + armedSlots.length + 1))
-
+export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, onArm, onDisarm, onSelect, onAudition, onSelectNone, onDelete, onToggleLock }: Props) {
   return (
     <div className="take-slots" aria-label="Bar takes">
-      {Array.from({ length: slotCount }, (_, slot) => {
+      {Array.from({ length: 5 }, (_, slot) => {
         const take = takes[slot]
         const armed = armedSlots.includes(slot)
+        const auditioning = Boolean(take && take.takeId === auditioningTakeId)
+        const label = armed
+          ? `Disarm Take ${slot + 1}`
+          : take?.selected
+            ? `Audition Take ${slot + 1} on its own (right-click to delete)`
+            : take
+              ? `Use Take ${slot + 1} for playback (right-click to delete)`
+              : `Arm Take ${slot + 1}`
         return (
-          <div key={slot} className={`take-slot ${take ? 'take-recorded' : 'take-empty'} ${armed ? 'take-armed' : ''}`}>
+          <div className="take-pad-wrap" key={slot}>
             <button
-              className="take-pad"
-              title={armed ? `Disarm Take ${slot + 1}` : take ? `Use Take ${slot + 1} for playback` : `Arm Take ${slot + 1}`}
+              type="button"
+              className={`take-pad ${take ? 'take-recorded' : 'take-empty'} ${take?.selected ? 'take-selected' : ''} ${auditioning ? 'take-auditioning' : ''} ${armed ? 'take-armed' : ''}`}
+              aria-label={label}
+              title={label}
               onClick={(event) => {
                 event.stopPropagation()
                 if (armed) onDisarm(slot)
+                else if (take?.selected) onAudition(take.takeId)
                 else if (take) onSelect(take.takeId)
                 else onArm(slot)
               }}
+              onContextMenu={(event) => {
+                if (!take || armed) return
+                event.preventDefault()
+                event.stopPropagation()
+                if (!take.locked) onDelete(take.takeId)
+              }}
             >
-              <strong>{slot + 1}</strong>
-              <span>{armed ? 'REC' : take ? 'TAKE' : 'EMPTY'}</span>
+              {slot + 1}
             </button>
-            {take && !armed ? (
-              <button
-                className={`take-use-light ${take.selected ? 'take-use-active' : ''}`}
-                aria-label={`Use Take ${slot + 1} for playback`}
-                title={`Use Take ${slot + 1} for playback`}
-                onClick={(event) => { event.stopPropagation(); onSelect(take.takeId) }}
-              />
-            ) : <span className="take-use-light take-use-disabled" />}
-            <div className="take-slot-actions">
-              <button className="take-action" onClick={(event) => {
-                event.stopPropagation()
-                if (armed) onDisarm(slot)
-                else onArm(slot)
-              }}>
-                {armed ? 'Cancel' : 'Rec'}
-              </button>
-              {take && <button className="take-action" onClick={(event) => {
-                event.stopPropagation()
-                onToggleLock(take.takeId)
-              }}>{take.locked ? 'Unlock' : 'Lock'}</button>}
-              {take && <button className="take-action" onClick={(event) => {
-                event.stopPropagation()
-                onListen(take.takeId)
-              }}>Listen</button>}
-              {take && <button className="take-action take-delete" disabled={Boolean(take.locked)} onClick={(event) => {
-                event.stopPropagation()
-                onDelete(take.takeId)
-              }}>Del</button>}
-            </div>
+            {take && !armed && (
+              <span
+                role="button"
+                tabIndex={0}
+                className={`take-lock ${take.locked ? 'take-lock-on' : ''}`}
+                aria-pressed={take.locked ?? false}
+                aria-label={take.locked ? `Unlock Take ${slot + 1}` : `Lock Take ${slot + 1} to protect it from deletion`}
+                title={take.locked ? `Unlock Take ${slot + 1}` : `Lock Take ${slot + 1} to protect it from deletion`}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onToggleLock(take.takeId)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onToggleLock(take.takeId)
+                }}
+              >
+                {take.locked ? '★' : '☆'}
+              </span>
+            )}
           </div>
         )
       })}
       <button
-        className={`no-take-button ${!armedSlots.length && !takes.some((take) => take.selected) ? 'no-take-active' : ''}`}
-        disabled={Boolean(armedSlots.length)}
-        onClick={(event) => { event.stopPropagation(); onSelectNone() }}
+        type="button"
+        className={`take-pad take-none ${noTakeActive ? 'take-selected' : ''}`}
+        disabled={armedSlots.length > 0}
+        aria-label="Play this bar without a vocal take"
+        title="Play this bar without a vocal take"
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelectNone()
+        }}
       >
-        No take
+        Ø
       </button>
     </div>
   )

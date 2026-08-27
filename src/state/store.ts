@@ -5,6 +5,7 @@ interface UIState {
   currentBarIndex: number
   isRecording: boolean
   isVocalMuted: boolean
+  loopRange?: { start: number; end: number }
   armedTakeByBar: Record<number, number[]>
   audioUrl?: string
   beatFile?: File
@@ -13,13 +14,15 @@ interface UIState {
 interface StoreState extends UIState {
   project: Project
   setProject: (project: Project) => void
-  setBeatMeta: (meta: { fileId: string; durationSec: number; bpm: number; offsetSec?: number; timeSig: { beatsPerBar: number; beatUnit: number } }) => void
+  setBeatMeta: (meta: { fileId: string; durationSec: number; bpm: number; offsetSec?: number; bar1AnchorTime?: number; timeSig: { beatsPerBar: number; beatUnit: number } }) => void
+  setBar1AnchorTime: (timeSec: number) => void
   setBars: (bars: Bar[]) => void
   setAudioUrl: (url?: string) => void
   setBeatFile: (file?: File) => void
   setCurrentBar: (index: number) => void
   setRecording: (flag: boolean) => void
   setVocalMuted: (flag: boolean) => void
+  setLoopRange: (range?: { start: number; end: number }) => void
   armTake: (barIndex: number, requestedSlot: number) => void
   disarmTake: (barIndex: number, slot?: number) => void
   consumeArmedTake: (barIndex: number) => void
@@ -29,6 +32,7 @@ interface StoreState extends UIState {
   selectTake: (barIndex: number, takeId: string) => void
   clearTakeSelection: (barIndex: number) => void
   deleteTake: (takeId: string) => void
+  restoreTake: (take: Take, index: number) => void
   deleteAllTakes: () => { deletedFileIds: string[] }
   toggleTakeLock: (takeId: string) => void
   setTakeGain: (takeId: string, gain: number) => void
@@ -46,6 +50,7 @@ const defaultProject: Project = {
     durationSec: 0,
     bpm: 0,
     offsetSec: 0,
+    bar1AnchorTime: undefined,
     timeSig: { beatsPerBar: 4, beatUnit: 4 },
   },
   bars: [],
@@ -53,7 +58,6 @@ const defaultProject: Project = {
   mix: {
     masterBeatGain: 0.9,
     globalVocalGain: 1,
-    barGains: {},
   },
 }
 
@@ -62,6 +66,7 @@ export const useStore = create<StoreState>((set, get) => ({
   currentBarIndex: 0,
   isRecording: false,
   isVocalMuted: false,
+  loopRange: undefined,
   armedTakeByBar: {},
 
   setProject(project) {
@@ -70,6 +75,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setBeatMeta(meta) {
     set((state) => ({ project: { ...state.project, beat: meta } }))
+  },
+
+  setBar1AnchorTime(timeSec) {
+    set((state) => ({ project: { ...state.project, beat: { ...state.project.beat, offsetSec: timeSec, bar1AnchorTime: timeSec } } }))
   },
 
   setBars(bars) {
@@ -95,6 +104,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setVocalMuted(flag) {
     set({ isVocalMuted: flag })
+  },
+
+  setLoopRange(range) {
+    set({ loopRange: range })
   },
 
   armTake(barIndex, requestedSlot) {
@@ -228,6 +241,24 @@ export const useStore = create<StoreState>((set, get) => ({
     }
     set({ project: { ...state.project, takes }, armedTakeByBar: {} })
     return { deletedFileIds }
+  },
+
+  // Re-inserts a deleted take at its original position so an undo restores the exact
+  // slot ordering the user saw, not just "somewhere in this bar".
+  restoreTake(take, index) {
+    set((state) => {
+      if (state.project.takes.some((item) => item.takeId === take.takeId)) return state
+      const takes = [...state.project.takes]
+      takes.splice(Math.max(0, Math.min(index, takes.length)), 0, take)
+      return {
+        project: {
+          ...state.project,
+          takes: take.selected
+            ? takes.map((item) => item.barIndex === take.barIndex ? { ...item, selected: item.takeId === take.takeId } : item)
+            : takes,
+        },
+      }
+    })
   },
 
   toggleTakeLock(takeId) {

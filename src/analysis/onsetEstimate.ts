@@ -9,16 +9,16 @@ export interface BpmDetectResult {
  * Search range matches the editor's supported BPM range. Automatic detection
  * is only an estimate; the user can correct BPM and Bar 1 offset manually.
  */
-export async function estimateBpmFromBuffer(buffer: AudioBuffer): Promise<BpmDetectResult | undefined> {
+export async function estimateBpmFromBuffer(buffer: AudioBuffer, analysisStartSec = 0): Promise<BpmDetectResult | undefined> {
   return new Promise((resolve) => {
     setTimeout(() => {
-      try { resolve(_detect(buffer)) }
+      try { resolve(_detect(buffer, analysisStartSec)) }
       catch { resolve(undefined) }
     }, 0)
   })
 }
 
-function _detect(buffer: AudioBuffer): BpmDetectResult | undefined {
+function _detect(buffer: AudioBuffer, analysisStartSec: number): BpmDetectResult | undefined {
   const SR     = buffer.sampleRate
   const FRAME  = 1024
   const HOP    = 256
@@ -33,6 +33,10 @@ function _detect(buffer: AudioBuffer): BpmDetectResult | undefined {
     for (let i = 0; i < ch.length; i++) m[i] = (ch[i] + r[i]) * 0.5
     ch = m
   }
+
+  const analysisStartFrame = Math.max(0, Math.min(ch.length - 1, Math.floor(analysisStartSec * SR)))
+  ch = ch.subarray(analysisStartFrame)
+  const analysisOffsetSec = analysisStartFrame / SR
 
   const nFrames = Math.floor((ch.length - FRAME) / HOP) + 1
   if (nFrames < 40) return undefined
@@ -122,8 +126,8 @@ function _detect(buffer: AudioBuffer): BpmDetectResult | undefined {
     if (avg > bestPhaseScore) { bestPhaseScore = avg; bestPhase = phase }
   }
 
-  // offsetSec = time of first beat (≥ music start)
-  const offsetSec = Math.round((musicStartFrame + bestPhase) * hopSec * 1000) / 1000
+  // offsetSec is reported in source-file time, even when analysis starts at Bar 1.
+  const offsetSec = Math.round((analysisOffsetSec + (musicStartFrame + bestPhase) * hopSec) * 1000) / 1000
 
   // Confidence: ACF peak prominence vs mean
   let acfSum = 0
