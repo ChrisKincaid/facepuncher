@@ -4,6 +4,7 @@ import type { Bar, MixSettings, Project, Take } from '../data/models'
 interface UIState {
   currentBarIndex: number
   isRecording: boolean
+  isVocalMuted: boolean
   armedTakeByBar: Record<number, number[]>
   audioUrl?: string
   beatFile?: File
@@ -18,6 +19,7 @@ interface StoreState extends UIState {
   setBeatFile: (file?: File) => void
   setCurrentBar: (index: number) => void
   setRecording: (flag: boolean) => void
+  setVocalMuted: (flag: boolean) => void
   armTake: (barIndex: number, requestedSlot: number) => void
   disarmTake: (barIndex: number, slot?: number) => void
   consumeArmedTake: (barIndex: number) => void
@@ -27,6 +29,7 @@ interface StoreState extends UIState {
   selectTake: (barIndex: number, takeId: string) => void
   clearTakeSelection: (barIndex: number) => void
   deleteTake: (takeId: string) => void
+  deleteAllTakes: () => { deletedFileIds: string[] }
   toggleTakeLock: (takeId: string) => void
   setTakeGain: (takeId: string, gain: number) => void
   updateMix: (mix: Partial<MixSettings>) => void
@@ -58,6 +61,7 @@ export const useStore = create<StoreState>((set, get) => ({
   project: defaultProject,
   currentBarIndex: 0,
   isRecording: false,
+  isVocalMuted: false,
   armedTakeByBar: {},
 
   setProject(project) {
@@ -87,6 +91,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setRecording(flag) {
     set({ isRecording: flag })
+  },
+
+  setVocalMuted(flag) {
+    set({ isVocalMuted: flag })
   },
 
   armTake(barIndex, requestedSlot) {
@@ -199,6 +207,27 @@ export const useStore = create<StoreState>((set, get) => ({
       if (!barTakes.some((take) => take.selected) && barTakes[0]) barTakes[0].selected = true
       return { project: { ...state.project, takes: remaining } }
     })
+  },
+
+  // Clears every unlocked take across all bars in one action; locked takes are kept, matching
+  // the protection the per-take delete already gives them.
+  deleteAllTakes() {
+    const state = get()
+    const deletedFileIds = state.project.takes.filter((take) => !take.locked).map((take) => take.fileId)
+    const keptByBar = new Map<number, Take[]>()
+    for (const take of state.project.takes) {
+      if (!take.locked) continue
+      const arr = keptByBar.get(take.barIndex) ?? []
+      arr.push(take)
+      keptByBar.set(take.barIndex, arr)
+    }
+    const takes: Take[] = []
+    for (const barTakes of keptByBar.values()) {
+      if (!barTakes.some((take) => take.selected) && barTakes[0]) barTakes[0].selected = true
+      takes.push(...barTakes)
+    }
+    set({ project: { ...state.project, takes }, armedTakeByBar: {} })
+    return { deletedFileIds }
   },
 
   toggleTakeLock(takeId) {

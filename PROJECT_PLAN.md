@@ -51,9 +51,24 @@ The hardest technical proof is synchronized monitoring and recording with accept
 
 - Current phase: Phase 0 - Browser feasibility and baseline recovery
 - Current focus: Make the existing browser prototype build, then prove the core audio loop
-- Last updated: 2026-08-22
+- Last updated: 2026-08-24
 - VST track: Parked
 - Mobile apps: Parked
+- Supported browser decision: Chromium-based browsers only (Chrome, Edge, Brave, etc.). Firefox is
+  explicitly unsupported for recording — confirmed root cause below.
+
+## Known Browser Limitation: Firefox Is Unsupported For Recording
+
+Firefox's `AudioWorkletProcessor` delivers an empty input buffer on some render quanta during
+sustained, high-energy input (e.g. a long held vocal note spanning a bar boundary), which the
+recorder worklet was substituting with digitally silent frames. This produced short, exact-silence
+gaps in recorded takes, reproduced identically across two different USB microphones, and confirmed
+absent when the same test was run in Chrome. This is an internal Firefox input-delivery behavior,
+not a bug in this app's recording pipeline, and there is no reliable way to detect and correct for
+it from JavaScript without introducing fabricated (interpolated) audio — a materially riskier fix
+than simply requiring a Chromium-based browser. Decision: require Chrome/Edge/Chromium; do not
+pursue a Firefox-specific workaround. The app shows an in-app notice when it detects a non-Chromium
+browser.
 
 ## What Already Exists In The Prototype
 
@@ -737,6 +752,18 @@ Use this format for each update:
 - Completed: Replaced Loop start and Loop end dropdowns with direct controls on each bar. Users can click Set start on one bar and Set end on another; the active range is summarized at the top and boundary bars are visibly marked.
 - Blocked: None in code; browser confirmation remains.
 - Next: Test selecting loop boundaries directly from bar rows, including changing start past the current end and end before the current start.
+
+- Date: 2026-08-26
+- Phase: Phase 1
+- Completed: Moved the Play/Pause and Loop control bar out of the scrolling main content so it remains directly beneath the pinned waveform header. Both header surfaces use solid themed backgrounds. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual browser layout validation remains.
+- Next: Import a beat, generate enough bars to scroll, then verify the waveform and transport bar remain flush and the Play/Pause and Loop controls stay clickable while scrolling.
+
+- Date: 2026-08-27
+- Phase: Phase 1
+- Completed: Routed every active vocal take through a persistent real-time master vocal gain bus. Vocal Volume now changes that bus immediately, and the store-backed Vocal Mute control silences/restores the bus without overwriting global or individual take gains. `npm run build` passes; `npm run lint` completes with 0 errors and 5 existing React hook dependency warnings.
+- Blocked: Manual live-audio validation remains.
+- Next: Play selected takes, change Vocal Volume during playback, toggle Vocal Mute off/on, and confirm immediate changes while per-take gain values remain intact.
 
 ## Priority Order
 1. Browser webapp (highest priority).

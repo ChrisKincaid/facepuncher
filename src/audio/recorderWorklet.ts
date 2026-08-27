@@ -17,7 +17,7 @@ class RecorderWorklet extends AudioWorkletProcessor {
     // takes stay aligned to real time instead of collapsing to the front.
     const channelData = input && input.length > 0 ? input[0] : undefined
     const frame = channelData ? channelData.slice(0) : new Float32Array(128)
-    this.port.postMessage({ frame, startFrame: currentFrame }, [frame.buffer])
+    this.port.postMessage({ frame, startFrame: currentFrame, wasEmptyInput: !channelData }, [frame.buffer])
     return true
   }
 }

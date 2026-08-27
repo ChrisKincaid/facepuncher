@@ -39,6 +39,11 @@ export async function getBlob(key: string) {
   return db.get('blobs', key)
 }
 
+export async function deleteBlob(key: string) {
+  const db = await getDb()
+  await db.delete('blobs', key)
+}
+
 export async function saveProject(project: Project) {
   const db = await getDb()
   await db.put('projects', project)
