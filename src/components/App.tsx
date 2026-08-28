@@ -16,6 +16,11 @@ import { exportProjectToFist, importProjectFromFist } from '../utils/fistProject
 import type { Take } from '../data/models'
 
 const FALLBACK_LOOP_BARS = 16
+// Android and iOS route an audio accept list to capture apps and the gallery; omitting it sends
+// the picker straight to the file browser. Desktop keeps the filter.
+const IS_MOBILE = /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+const AUDIO_ACCEPT = IS_MOBILE ? undefined : 'audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac'
+const PROJECT_ACCEPT = IS_MOBILE ? undefined : '.fist,.zip,application/zip,application/octet-stream'
 const UNDO_WINDOW_SEC = 6
 const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180
@@ -1318,7 +1323,7 @@ export default function App() {
                 Import Project
                 <input
                   type="file"
-                  accept=".fist,.zip,application/zip,application/octet-stream"
+                  accept={PROJECT_ACCEPT}
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     event.target.value = ''
@@ -1360,7 +1365,7 @@ export default function App() {
               </div>
             )}
             <div className="controls">
-              <input type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" onChange={(e) => handleFile(e.target.files?.[0])} />
+              <input type="file" accept={AUDIO_ACCEPT} onChange={(e) => handleFile(e.target.files?.[0])} />
               {detectBusy && <span className="text-muted">Detecting BPM\u2026</span>}
               <button
                 className="detect-bars-button"
