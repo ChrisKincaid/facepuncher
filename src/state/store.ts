@@ -14,6 +14,7 @@ interface UIState {
 interface StoreState extends UIState {
   project: Project
   setProject: (project: Project) => void
+  setProjectName: (name: string) => void
   setBeatMeta: (meta: { fileId: string; durationSec: number; bpm: number; offsetSec?: number; bar1AnchorTime?: number; timeSig: { beatsPerBar: number; beatUnit: number } }) => void
   setBar1AnchorTime: (timeSec: number) => void
   setBars: (bars: Bar[]) => void
@@ -41,7 +42,7 @@ interface StoreState extends UIState {
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
-  name: 'Untitled Punch',
+  name: 'My PunchRap Beat',
   sampleRate: 44100,
   createdAt: new Date().toISOString(),
   latencyOffsetMs: 0,
@@ -71,6 +72,10 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setProject(project) {
     set({ project })
+  },
+
+  setProjectName(name) {
+    set((state) => ({ project: { ...state.project, name } }))
   },
 
   setBeatMeta(meta) {

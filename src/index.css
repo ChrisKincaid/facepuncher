@@ -460,6 +460,58 @@ body {
   font-size: 11px;
 }
 
+.setup-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.setup-project-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.project-title-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.project-title-field input {
+  width: 240px;
+  max-width: 42vw;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.project-title-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.setup-import-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.setup-import-button input {
+  display: none;
+}
+
 .beat-setup-header {
   position: relative;
   display: flex;
@@ -866,7 +918,7 @@ select {
 
 .bar-loop {
   background: linear-gradient(90deg, rgba(77, 208, 225, 0.13), rgba(77, 208, 225, 0.03));
-  border-left-color: rgba(77, 208, 225, 0.7);
+  border-left: 3px solid rgba(77, 208, 225, 0.7);
 }
 
 .bar-meta {
@@ -953,6 +1005,25 @@ select {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.undo-toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  animation: undo-toast-drain 6s linear forwards;
+}
+
+@keyframes undo-toast-drain {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
 }
 
 .undo-toast-action {
@@ -964,6 +1035,29 @@ select {
   background: var(--accent);
   border: 0;
   border-radius: 5px;
+}
+
+/* Stacked above the undo toast so both can be on screen at once. */
+.project-toast {
+  bottom: 66px;
+}
+
+.button-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid rgba(160, 163, 177, 0.35);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: button-spin 0.7s linear infinite;
+}
+
+@keyframes button-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .take-pad {

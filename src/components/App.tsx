@@ -12,7 +12,13 @@ import { audioEngine } from '../audio/audioEngine'
 import { renderOffline } from '../audio/offlineRender'
 import { encodeWavFromAudioBuffer } from '../audio/wav'
 import { deleteBlob, getBlob, listProjects, putBlob, saveProject } from '../data/storage'
+import { exportProjectToFist, importProjectFromFist } from '../utils/fistProjectService'
 import type { Take } from '../data/models'
+
+const FALLBACK_LOOP_BARS = 16
+const UNDO_WINDOW_SEC = 6
+const DETECT_BPM_MIN = 60
+const DETECT_BPM_MAX = 180
 
 export default function App() {
   const {
@@ -46,6 +52,7 @@ export default function App() {
     setTakeGain,
     updateMix,
     setProject,
+    setProjectName,
   } = useStore()
 
   const [, setStatus] = useState('Drop a beat to start (WAV/MP3, ≤10 min).')
@@ -91,8 +98,12 @@ export default function App() {
   const [auditioningTakeId, setAuditioningTakeId] = useState<string | undefined>(undefined)
   const auditionTimer = useRef<number | null>(null)
   const [undoToast, setUndoToast] = useState<{ take: Take; index: number } | null>(null)
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState(0)
   const undoTimer = useRef<number | null>(null)
   const pendingUndoRef = useRef<{ take: Take; index: number } | null>(null)
+  const [isExportingProject, setIsExportingProject] = useState(false)
+  const [projectToast, setProjectToast] = useState<string | null>(null)
+  const projectToastTimer = useRef<number | null>(null)
   const manualOffsetRef = useRef(false)
   const manualBpmRef = useRef(false)
   const tapTimesRef = useRef<number[]>([])
@@ -103,6 +114,11 @@ export default function App() {
     [project.beat.durationSec, project.bars],
   )
   const audioLoaded = useMemo(() => Boolean(audioUrl && totalDuration > 0), [audioUrl, totalDuration])
+  // Before a grid exists the loop selects still need choices, so fall back to a nominal 16 bars.
+  const loopBarOptions = useMemo(
+    () => Array.from({ length: project.bars.length || FALLBACK_LOOP_BARS }, (_, index) => index),
+    [project.bars.length],
+  )
 
   useEffect(() => {
     vocalSyncMsRef.current = project.latencyOffsetMs
@@ -276,6 +292,9 @@ export default function App() {
       const fileId = `beat-${crypto.randomUUID()}`
       blobCache.current.set(fileId, file)
       void putBlob(fileId, file)
+      if (!project.name.trim() || project.name === 'My PunchRap Beat') {
+        setProjectName(file.name.replace(/\.[^.]+$/, ''))
+      }
       manualOffsetRef.current = false
       manualBpmRef.current = false
       bar1AnchorRef.current = undefined
@@ -285,7 +304,7 @@ export default function App() {
       setPlayhead(0)
       setCursor(0)
       audioEngine.seek(0)
-      setStatus(`Loaded \u201c${file.name}\u201d (${meta.durationSec.toFixed(1)}s). Set Bar 1 or run Auto-detect bars.`)
+      setStatus(`Loaded \u201c${file.name}\u201d (${meta.durationSec.toFixed(1)}s). Set Bar 1 or click Create Bars.`)
     } catch (err) {
       setDetectBusy(false)
       console.error(err)
@@ -301,23 +320,27 @@ export default function App() {
     const detected = await estimateBpmFromBuffer(buf, existingAnchor ?? 0)
     setDetectBusy(false)
     if (!detected) { setStatus('BPM detection failed. Try adjusting manually.'); return }
-    const bpm = normalizeBpm(detected.bpm)
+    const bpm = normalizeDetectedBpm(detected.bpm)
     manualBpmRef.current = false
     const anchor = existingAnchor ?? detected.offsetSec
     const offsetSec = anchor
     bar1AnchorRef.current = anchor
     setBeatMeta({ ...project.beat, bpm, offsetSec, bar1AnchorTime: anchor })
     setBars(generateBars(project.beat.durationSec, bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, offsetSec, anchor))
-    setStatus(`Auto-detected bars at ${bpm} BPM, offset ${offsetSec.toFixed(3)}s (${Math.round(detected.confidence * 100)}% confidence).`)
+    setStatus(`Created bars at ${bpm} BPM, offset ${offsetSec.toFixed(3)}s (${Math.round(detected.confidence * 100)}% confidence).`)
   }
 
-  const normalizeBpm = (bpm: number) => {
-    const rounded = Math.round(bpm * 10) / 10
-    return Math.max(50, Math.min(300, rounded < 50 ? rounded * 2 : rounded))
+  // Detection can latch onto half/double time, so fold the estimate into a musically sane
+  // window before it becomes the grid. Manual entry deliberately has no such limits.
+  const normalizeDetectedBpm = (bpm: number) => {
+    let candidate = Math.round(bpm * 10) / 10
+    while (candidate < DETECT_BPM_MIN && candidate > 0) candidate *= 2
+    while (candidate > DETECT_BPM_MAX) candidate /= 2
+    return Math.round(Math.max(DETECT_BPM_MIN, Math.min(DETECT_BPM_MAX, candidate)) * 10) / 10
   }
 
   const applyBpm = (bpm: number) => {
-    const clamped = normalizeBpm(bpm)
+    const clamped = Math.max(1, Math.min(999, Math.round(bpm * 10) / 10))
     const anchor = bar1AnchorRef.current ?? project.bars[0]?.startSec ?? project.beat.bar1AnchorTime
     bar1AnchorRef.current = anchor
     setBeatMeta({ ...project.beat, bpm: clamped, bar1AnchorTime: anchor })
@@ -329,14 +352,14 @@ export default function App() {
   const handleBpmInput = (value: string) => {
     setBpmInput(value)
     const bpm = Number(value)
-    if (!value || !Number.isFinite(bpm) || bpm > 300) return
+    if (!value || !Number.isFinite(bpm) || bpm <= 0) return
     manualBpmRef.current = true
     applyBpm(bpm)
   }
 
   const commitBpmInput = () => {
     const bpm = Number(bpmInput)
-    if (!Number.isFinite(bpm)) {
+    if (!Number.isFinite(bpm) || bpm <= 0) {
       setBpmInput(project.beat.bpm ? String(project.beat.bpm) : '')
       return
     }
@@ -354,19 +377,16 @@ export default function App() {
     const intervals = nextTaps.slice(1).map((time, index) => time - nextTaps[index])
     const averageInterval = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length
     const bpm = 60000 / averageInterval
-    if (bpm > 300) return
+    if (bpm <= 0 || !Number.isFinite(bpm)) return
     manualBpmRef.current = true
     setBpmInput(String(Math.round(bpm * 10) / 10))
     applyBpm(bpm)
   }
 
   useEffect(() => {
-    if (!project.bars.length) {
-      setLoopRange(undefined)
-      return
-    }
+    if (!project.bars.length) return
     if (!loopRange) {
-      setLoopRange({ start: 0, end: project.bars.length - 1 })
+      setLoopRange({ start: 0, end: Math.min(1, project.bars.length - 1) })
       return
     }
     const start = Math.min(loopRange.start, project.bars.length - 1)
@@ -374,8 +394,7 @@ export default function App() {
     if (start !== loopRange.start || end !== loopRange.end) setLoopRange({ start, end })
   }, [loopRange, project.bars.length, setLoopRange])
 
-  const handleSeek = useCallback(
-    (time: number) => {
+  const handleSeek = useCallback(    (time: number) => {
       chainedThroughBarRef.current = -1
       setPlayhead(time)
       setCursor(time)
@@ -405,6 +424,12 @@ export default function App() {
       setBars(generateBars(project.beat.durationSec, project.beat.bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, anchor, anchor))
     }
   }, [project.beat, setBar1AnchorTime, setBars, totalDuration])
+
+  useEffect(() => {
+    if (!undoToast) return
+    const tick = window.setInterval(() => setUndoSecondsLeft((left) => Math.max(0, left - 1)), 1000)
+    return () => window.clearInterval(tick)
+  }, [undoToast])
 
   const handlePlay = useCallback(() => {
     if (!audioLoaded) return
@@ -460,15 +485,17 @@ export default function App() {
   }, [audioLoaded])
 
   const handleLoopChange = (start: number, end: number) => {
-    if (!project.bars.length) return
-    const clampedStart = Math.max(0, Math.min(start, project.bars.length - 1))
-    const clampedEnd = Math.max(clampedStart, Math.min(end, project.bars.length - 1))
+    const barCount = project.bars.length || FALLBACK_LOOP_BARS
+    const clampedStart = Math.max(0, Math.min(start, barCount - 1))
+    const clampedEnd = Math.max(clampedStart, Math.min(end, barCount - 1))
     chainedThroughBarRef.current = -1
     setLoopRange({ start: clampedStart, end: clampedEnd })
   }
 
   const handleLoopStartChange = (start: number) => {
-    handleLoopChange(start, Math.max(start, loopRange?.end ?? start))
+    // A fresh start point implies a one-bar loop unless the user widens it themselves.
+    const end = loopRange && loopRange.end > start ? loopRange.end : start + 1
+    handleLoopChange(start, end)
   }
 
   const handleLoopEndChange = (end: number) => {
@@ -814,12 +841,13 @@ export default function App() {
     }
     pendingUndoRef.current = { take: target, index }
     setUndoToast({ take: target, index })
+    setUndoSecondsLeft(UNDO_WINDOW_SEC)
     undoTimer.current = window.setTimeout(() => {
       undoTimer.current = null
       pendingUndoRef.current = null
       purgeTake(target)
       setUndoToast(null)
-    }, 5000)
+    }, UNDO_WINDOW_SEC * 1000)
     // A remaining take may have been auto-selected in its place, so resolve what should
     // now be audible for this bar instead of assuming silence.
     const replacement = project.takes.find((item) => item.barIndex === target.barIndex && item.takeId !== takeId)
@@ -988,6 +1016,76 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [currentBarIndex, handlePause, handlePlay, isPlaying, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar])
 
+  // Auto-dismissing toast; the packaging message instead stays up until export resolves.
+  const showProjectToast = (message: string) => {
+    if (projectToastTimer.current) window.clearTimeout(projectToastTimer.current)
+    setProjectToast(message)
+    projectToastTimer.current = window.setTimeout(() => {
+      projectToastTimer.current = null
+      setProjectToast(null)
+    }, 4000)
+  }
+
+  const handleExportProject = async () => {
+    if (isExportingProject) return
+    setIsExportingProject(true)
+    setProjectToast('Compacting audio and packaging project\u2026 Please wait.')
+    try {
+      await exportProjectToFist(project, {
+        loopEnabled,
+        loopRange,
+        isVocalMuted,
+        monitorGain,
+      })
+      setStatus(`Exported \u201c${project.name}.fist\u201d.`)
+      showProjectToast('Download complete!')
+    } catch (err) {
+      console.error('project export failed', err)
+      setStatus('Could not export this project.')
+      showProjectToast('Export failed — see console for details.')
+    } finally {
+      setIsExportingProject(false)
+    }
+  }
+
+  const handleImportProject = async (file: File) => {
+    try {
+      setStatus(`Opening ${file.name}\u2026`)
+      handleStop()
+      const { project: imported, session, beatBlob, takeBlobs } = await importProjectFromFist(file)
+      blobCache.current.clear()
+      decodedTakeCache.current.clear()
+      for (const [fileId, blob] of takeBlobs) blobCache.current.set(fileId, blob)
+      if (beatBlob) {
+        blobCache.current.set(imported.beat.fileId, beatBlob)
+        await audioEngine.loadBeat(new File([beatBlob], 'main_beat', { type: beatBlob.type || 'audio/wav' }))
+        setAudioUrl(URL.createObjectURL(beatBlob))
+      } else {
+        setAudioUrl(undefined)
+      }
+      manualOffsetRef.current = true
+      manualBpmRef.current = true
+      bar1AnchorRef.current = imported.beat.bar1AnchorTime
+      setProject(imported)
+      setBpmInput(imported.beat.bpm ? String(imported.beat.bpm) : '')
+      audioEngine.setMasterBeatGain(imported.mix.masterBeatGain)
+      audioEngine.setMasterVocalGain(imported.mix.globalVocalGain)
+      audioEngine.setMasterVocalMuted(session.isVocalMuted)
+      setVocalMuted(session.isVocalMuted)
+      setMonitorGain(session.monitorGain)
+      audioEngine.setMonitorGain(monitorEnabled ? session.monitorGain : 0)
+      setLoopRange(session.loopRange)
+      setLoopEnabled(session.loopEnabled)
+      setWaveformResetKey((key) => key + 1)
+      setStatus(`Imported \u201c${imported.name}\u201d (${imported.takes.length} take(s)).`)
+      showProjectToast(`Imported \u201c${imported.name}\u201d.`)
+    } catch (err) {
+      console.error('project import failed', err)
+      setStatus('Could not read that .fist project file.')
+      showProjectToast('Could not read that .fist project file.')
+    }
+  }
+
   const handleExport = async (vocalsOnly: boolean) => {
     if (!project.beat.durationSec) return
     setExporting(true)
@@ -1108,21 +1206,19 @@ export default function App() {
         <label className="loop-range-select">
           <span>Loop Start</span>
           <select
-            value={loopRange?.start ?? ''}
-            disabled={!project.bars.length}
+            value={loopRange?.start ?? 0}
             onChange={(event) => handleLoopStartChange(Number(event.target.value))}
           >
-            {project.bars.map((bar) => <option key={bar.index} value={bar.index}>Bar {bar.index + 1}</option>)}
+            {loopBarOptions.map((index) => <option key={index} value={index}>Bar {index + 1}</option>)}
           </select>
         </label>
         <label className="loop-range-select">
           <span>Loop End</span>
           <select
-            value={loopRange?.end ?? ''}
-            disabled={!project.bars.length}
+            value={loopRange?.end ?? 0}
             onChange={(event) => handleLoopEndChange(Number(event.target.value))}
           >
-            {project.bars.map((bar) => <option key={bar.index} value={bar.index}>Bar {bar.index + 1}</option>)}
+            {loopBarOptions.map((index) => <option key={index} value={index}>Bar {index + 1}</option>)}
           </select>
         </label>
         </div>
@@ -1189,14 +1285,51 @@ export default function App() {
 
           <section className={`setup-stack ${showSetup ? '' : 'setup-stack-collapsed'}`}>
           <div className="setup-stack-header">
-            <span className="collapsible-title">SETUP</span>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setShowSetup((visible) => !visible)}
-            >
-              {showSetup ? 'Hide Setup' : 'Show Setup'}
-            </button>
+            <div className="setup-project-group">
+            <label className="project-title-field">
+              <span className="collapsible-title">Project</span>
+              <input
+                type="text"
+                value={project.name}
+                maxLength={80}
+                placeholder="My PunchRap Beat"
+                aria-label="Project title"
+                title="Used as the .fist export file name"
+                onChange={(event) => setProjectName(event.target.value)}
+              />
+            </label>
+              <button
+                type="button"
+                className="secondary setup-import-button"
+                disabled={!project.beat.fileId || isExportingProject}
+                title="Save the beat, bar grid, and every take into one .fist file"
+                onClick={handleExportProject}
+              >
+                {isExportingProject && <span className="button-spinner" aria-hidden="true" />}
+                {isExportingProject ? 'Packing .fist\u2026' : 'Export Project (.fist)'}
+              </button>
+              <label className="secondary setup-import-button" title="Load a previously exported .fist project">
+                Import Project
+                <input
+                  type="file"
+                  accept=".fist,.zip"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (file) void handleImportProject(file)
+                  }}
+                />
+              </label>
+            </div>
+            <div className="setup-project-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setShowSetup((visible) => !visible)}
+              >
+                {showSetup ? 'Hide Setup' : 'Show Setup'}
+              </button>
+            </div>
           </div>
           {showSetup && <>
           <section className="panel beat-setup-panel">
@@ -1215,7 +1348,7 @@ export default function App() {
             {showImportHelp && (
               <div className="bwe-help-text">
                 <strong>File:</strong> upload a WAV or MP3 under 10 minutes long.<br />
-                <strong>BPM:</strong> is available in the top transport bar. Auto-detect bars estimates it automatically, or you can set an exact value there.<br />
+                <strong>BPM:</strong> is available in the top transport bar. Create Bars estimates it automatically, or you can set an exact value there.<br />
                 <strong>Offset:</strong> sets where Bar 1 begins, in seconds from the start of the file.<br />
                 <strong>Set Bar 1 here:</strong> sets the offset to the current play position instead of typing a number.
               </div>
@@ -1228,7 +1361,7 @@ export default function App() {
                 onClick={handleAutoDetectBars}
                 disabled={detectBusy || !audioEngine.beatAudioBuffer}
               >
-                {detectBusy ? 'Detecting\u2026' : 'Auto-detect bars'}
+                {detectBusy ? 'Detecting\u2026' : 'Create Bars'}
               </button>
               <div className="transport-bpm" onClick={(event) => event.stopPropagation()}>
                 <span>BPM</span>
@@ -1237,8 +1370,8 @@ export default function App() {
                   value={bpmInput}
                   onChange={(event) => handleBpmInput(event.target.value)}
                   onBlur={commitBpmInput}
-                  min={30}
-                  max={300}
+                  min={1}
+                  max={999}
                   step={0.1}
                   aria-label="Global BPM"
                 />
@@ -1268,7 +1401,7 @@ export default function App() {
                 onClick={() => {
                   const position = isPlaying ? cursor : playhead
                   setBar1Anchor(position)
-                  setStatus(`Bar 1 set to ${position.toFixed(3)}s. Click Auto-detect bars when ready.`)
+                  setStatus(`Bar 1 set to ${position.toFixed(3)}s. Click Create Bars when ready.`)
                 }}
               >
                 Set Bar 1
@@ -1396,10 +1529,20 @@ export default function App() {
         </div>
       </div>
 
+      {projectToast && (
+        <div className="undo-toast project-toast" role="status">
+          {isExportingProject && <span className="button-spinner" aria-hidden="true" />}
+          <span>{projectToast}</span>
+        </div>
+      )}
+
       {undoToast && (
         <div className="undo-toast" role="status">
+          <span className="undo-toast-progress" aria-hidden="true" />
           <span>Take deleted</span>
-          <button type="button" className="undo-toast-action" onClick={handleUndoDelete}>Undo</button>
+          <button type="button" className="undo-toast-action" onClick={handleUndoDelete}>
+            Undo ({undoSecondsLeft}s)
+          </button>
         </div>
       )}
     </div>
