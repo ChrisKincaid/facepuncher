@@ -280,8 +280,10 @@ export default function App() {
 
   const handleFile = async (file?: File) => {
     if (!file) return
-    const extOk = /(wav|wave|mp3)$/i.test(file.name)
-    if (!extOk) { setStatus('Only WAV or MP3 are accepted.'); return }
+    // Mobile pickers often hand back a content-provider file with no extension, so trust the
+    // MIME type too and let decodeAudioData reject anything that isn't really audio.
+    const looksLikeAudio = /\.(wav|wave|mp3|m4a|aac|ogg|flac)$/i.test(file.name) || file.type.startsWith('audio/')
+    if (!looksLikeAudio) { setStatus('Please choose an audio file.'); return }
     try {
       setStatus(`Decoding ${file.name}\u2026`)
       const meta = await audioEngine.loadBeat(file)
@@ -1316,7 +1318,7 @@ export default function App() {
                 Import Project
                 <input
                   type="file"
-                  accept=".fist,.zip"
+                  accept=".fist,.zip,application/zip,application/octet-stream"
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     event.target.value = ''
@@ -1351,14 +1353,14 @@ export default function App() {
             </div>
             {showImportHelp && (
               <div className="bwe-help-text">
-                <strong>File:</strong> upload a WAV or MP3 under 10 minutes long.<br />
+                <strong>File:</strong> upload an audio file (MP3, WAV, M4A) under 10 minutes long.<br />
                 <strong>BPM:</strong> is available in the top transport bar. Create Bars estimates it automatically, or you can set an exact value there.<br />
                 <strong>Offset:</strong> sets where Bar 1 begins, in seconds from the start of the file.<br />
                 <strong>Set Bar 1 here:</strong> sets the offset to the current play position instead of typing a number.
               </div>
             )}
             <div className="controls">
-              <input type="file" accept="audio/wav,audio/mp3,audio/mpeg" onChange={(e) => handleFile(e.target.files?.[0])} />
+              <input type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" onChange={(e) => handleFile(e.target.files?.[0])} />
               {detectBusy && <span className="text-muted">Detecting BPM\u2026</span>}
               <button
                 className="detect-bars-button"
