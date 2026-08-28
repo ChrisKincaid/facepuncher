@@ -52,7 +52,7 @@ export function BarList({
   onTakeGain,
 }: Props) {
   return (
-    <div className="panel">
+    <div className="panel bar-list-panel">
       <div className="collapsible-header" style={{ marginBottom: 6 }}>
         <span className="collapsible-title">Bars</span>
       </div>
@@ -91,7 +91,6 @@ export function BarList({
                   onAudition={onAuditionTake}
                   onSelectNone={() => onSelectNoTake(bar.index)}
                   onDelete={onDeleteTake}
-                  onToggleLock={onToggleTakeLock}
                 />
               </div>
               <div className="bar-gains" onClick={(e) => e.stopPropagation()}>
@@ -130,9 +129,23 @@ export function BarList({
                 </button>
                 <button
                   type="button"
+                  className={`secondary bar-fav-button ${selectedTake?.locked ? 'bar-fav-on' : ''}`}
+                  disabled={!selectedTake}
+                  aria-pressed={selectedTake?.locked ?? false}
+                  title={!selectedTake
+                    ? 'Select a take to favorite it'
+                    : selectedTake.locked
+                      ? 'Unfavorite — allows this take to be deleted'
+                      : 'Favorite — protects this take from deletion'}
+                  onClick={() => selectedTake && onToggleTakeLock(selectedTake.takeId)}
+                >
+                  {selectedTake?.locked ? '★' : '☆'}
+                </button>
+                <button
+                  type="button"
                   className="secondary bar-delete-button"
-                  disabled={!selectedTake || Boolean(selectedTake.locked)}
-                  title={selectedTake?.locked ? 'Unlock this take before deleting it' : 'Delete active take'}
+                  disabled={!selectedTake}
+                  title={selectedTake?.locked ? 'Favorited take — unfavorite it to delete' : 'Delete active take'}
                   onClick={() => selectedTake && onDeleteTake(selectedTake.takeId)}
                 >
                   X

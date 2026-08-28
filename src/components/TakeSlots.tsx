@@ -11,10 +11,9 @@ interface Props {
   onAudition: (takeId: string) => void
   onSelectNone: () => void
   onDelete: (takeId: string) => void
-  onToggleLock: (takeId: string) => void
 }
 
-export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, onArm, onDisarm, onSelect, onAudition, onSelectNone, onDelete, onToggleLock }: Props) {
+export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, onArm, onDisarm, onSelect, onAudition, onSelectNone, onDelete }: Props) {
   return (
     <div className="take-slots" aria-label="Bar takes">
       {Array.from({ length: 5 }, (_, slot) => {
@@ -29,51 +28,28 @@ export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, 
               ? `Use Take ${slot + 1} for playback (right-click to delete)`
               : `Arm Take ${slot + 1}`
         return (
-          <div className="take-pad-wrap" key={slot}>
-            <button
-              type="button"
-              className={`take-pad ${take ? 'take-recorded' : 'take-empty'} ${take?.selected ? 'take-selected' : ''} ${auditioning ? 'take-auditioning' : ''} ${armed ? 'take-armed' : ''}`}
-              aria-label={label}
-              title={label}
-              onClick={(event) => {
-                event.stopPropagation()
-                if (armed) onDisarm(slot)
-                else if (take?.selected) onAudition(take.takeId)
-                else if (take) onSelect(take.takeId)
-                else onArm(slot)
-              }}
-              onContextMenu={(event) => {
-                if (!take || armed) return
-                event.preventDefault()
-                event.stopPropagation()
-                if (!take.locked) onDelete(take.takeId)
-              }}
-            >
-              {slot + 1}
-            </button>
-            {take && !armed && (
-              <span
-                role="button"
-                tabIndex={0}
-                className={`take-lock ${take.locked ? 'take-lock-on' : ''}`}
-                aria-pressed={take.locked ?? false}
-                aria-label={take.locked ? `Unlock Take ${slot + 1}` : `Lock Take ${slot + 1} to protect it from deletion`}
-                title={take.locked ? `Unlock Take ${slot + 1}` : `Lock Take ${slot + 1} to protect it from deletion`}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onToggleLock(take.takeId)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter' && event.key !== ' ') return
-                  event.preventDefault()
-                  event.stopPropagation()
-                  onToggleLock(take.takeId)
-                }}
-              >
-                {take.locked ? '★' : '☆'}
-              </span>
-            )}
-          </div>
+          <button
+            key={slot}
+            type="button"
+            className={`take-pad ${take ? 'take-recorded' : 'take-empty'} ${take?.selected ? 'take-selected' : ''} ${auditioning ? 'take-auditioning' : ''} ${armed ? 'take-armed' : ''} ${take?.locked ? 'take-locked' : ''}`}
+            aria-label={label}
+            title={label}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (armed) onDisarm(slot)
+              else if (take?.selected) onAudition(take.takeId)
+              else if (take) onSelect(take.takeId)
+              else onArm(slot)
+            }}
+            onContextMenu={(event) => {
+              if (!take || armed) return
+              event.preventDefault()
+              event.stopPropagation()
+              onDelete(take.takeId)
+            }}
+          >
+            {slot + 1}
+          </button>
         )
       })}
       <button

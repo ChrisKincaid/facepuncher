@@ -833,7 +833,11 @@ export default function App() {
   const handleDeleteTake = (takeId: string) => {
     const index = project.takes.findIndex((item) => item.takeId === takeId)
     const target = project.takes[index]
-    if (!target || target.locked) return
+    if (!target) return
+    if (target.locked) {
+      showProjectToast('This one\u2019s a keeper \u2014 tap the \u2605 to unfavorite it first.')
+      return
+    }
     deleteTake(takeId)
     if (undoTimer.current) {
       window.clearTimeout(undoTimer.current)
@@ -1264,7 +1268,7 @@ export default function App() {
       <div className="app-main">
         <div className="shell">
           <div className="app-title-block">
-            <h2 className="app-title">PUNCHLINE</h2>
+            <h2 className="app-title">PUNCH RAP</h2>
             <div className="app-title-credit">
               brought to you by{' '}
               <a href="https://boxbap.com" target="_blank" rel="noopener noreferrer">BOXBAP</a>

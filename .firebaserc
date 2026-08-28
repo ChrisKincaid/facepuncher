@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "boombapboombox-a5b78"
+  },
+  "targets": {
+    "boombapboombox-a5b78": {
+      "hosting": {
+        "punchrap": [
+          "punchrap-boxbap"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

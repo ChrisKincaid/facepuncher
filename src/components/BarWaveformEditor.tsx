@@ -204,24 +204,24 @@ export function BarWaveformEditor(props: Props) {
     // Start handle (cyan)
     ctx.save()
     ctx.strokeStyle = '#4dd0e1'
-    ctx.lineWidth = 2
+    ctx.lineWidth = 1
     ctx.shadowColor = '#4dd0e1'
-    ctx.shadowBlur = 8
+    ctx.shadowBlur = 4
     ctx.beginPath(); ctx.moveTo(shx, 0); ctx.lineTo(shx, h); ctx.stroke()
     ctx.fillStyle = '#4dd0e1'
-    ctx.beginPath(); ctx.moveTo(shx, 0); ctx.lineTo(shx + 11, 0); ctx.lineTo(shx, 14); ctx.closePath(); ctx.fill()
+    ctx.beginPath(); ctx.moveTo(shx, 0); ctx.lineTo(shx + 5.5, 0); ctx.lineTo(shx, 7); ctx.closePath(); ctx.fill()
     ctx.restore()
 
     if (!propsRef.current.anchorOnly) {
       // End handle (amber)
       ctx.save()
       ctx.strokeStyle = '#f6c177'
-      ctx.lineWidth = 2
+      ctx.lineWidth = 1
       ctx.shadowColor = '#f6c177'
-      ctx.shadowBlur = 8
+      ctx.shadowBlur = 4
       ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx, h); ctx.stroke()
       ctx.fillStyle = '#f6c177'
-      ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx - 11, 0); ctx.lineTo(ehx, 14); ctx.closePath(); ctx.fill()
+      ctx.beginPath(); ctx.moveTo(ehx, 0); ctx.lineTo(ehx - 5.5, 0); ctx.lineTo(ehx, 7); ctx.closePath(); ctx.fill()
       ctx.restore()
     }
 
@@ -230,16 +230,16 @@ export function BarWaveformEditor(props: Props) {
     if (phx >= 0 && phx <= w) {
       ctx.save()
       ctx.strokeStyle = 'rgba(255,255,255,0.8)'
-      ctx.lineWidth = 1.5
-      ctx.setLineDash([3, 3])
+      ctx.lineWidth = 0.75
+      ctx.setLineDash([1.5, 1.5])
       ctx.shadowColor = 'rgba(255,255,255,0.4)'
-      ctx.shadowBlur = 4
+      ctx.shadowBlur = 2
       ctx.beginPath(); ctx.moveTo(phx, 0); ctx.lineTo(phx, h); ctx.stroke()
       ctx.restore()
     }
 
     // Time labels
-    ctx.font = '10px "Courier New", monospace'
+    ctx.font = '5px "Courier New", monospace'
     const sLabel = fmtMs(hs)
     const eLabel = fmtMs(he)
     ctx.fillStyle = '#4dd0e1'
@@ -426,7 +426,7 @@ export function BarWaveformEditor(props: Props) {
     <div className="bar-waveform-editor">
       <div className="bar-waveform-legend">
         <span style={{ color: '#4dd0e1' }}>▶ Start</span>
-        <span className="text-muted" style={{ fontSize: 11 }}>{props.anchorOnly ? 'drag the cyan handle to align Bar 1' : 'drag handles · cyan = start · amber = end'}</span>
+        <span className="text-muted" style={{ fontSize: 5.5 }}>{props.anchorOnly ? 'drag the cyan handle to align Bar 1' : 'drag handles · cyan = start · amber = end'}</span>
         {!props.anchorOnly && <span style={{ color: '#f6c177' }}>End ◀</span>}
       </div>
 

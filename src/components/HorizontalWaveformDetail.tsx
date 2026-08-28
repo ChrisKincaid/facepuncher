@@ -157,7 +157,7 @@ export function HorizontalWaveformDetail({
     // Bar grid lines + labels
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'
     ctx.lineWidth = 1
-    const fontSize = Math.round(10 * dprRef.current)
+    const fontSize = Math.round(5 * dprRef.current)
     ctx.font = `${fontSize}px monospace`
     ctx.fillStyle = 'rgba(160,163,177,0.6)'
     for (const bar of _bars) {
@@ -166,7 +166,7 @@ export function HorizontalWaveformDetail({
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke()
       const labelX = x + 3
       if (labelX > 0 && labelX < w - 20) {
-        ctx.fillText(`${bar.index + 1}`, labelX, fontSize + 2)
+        ctx.fillText(`${bar.index + 1}`, labelX, fontSize + 1)
       }
     }
 
@@ -269,8 +269,8 @@ export function HorizontalWaveformDetail({
         ctx.fillRect(x1, 0, x2 - x1, h)
 
         ctx.fillStyle = '#4dd0e1'
-        ctx.fillRect(Math.round(x1) - 1, 0, 3, h)
-        ctx.fillRect(Math.round(x2) - 1, 0, 3, h)
+        ctx.fillRect(Math.round(x1) - 1, 0, 1.5, h)
+        ctx.fillRect(Math.round(x2) - 1, 0, 1.5, h)
       }
     }
 
@@ -288,7 +288,7 @@ export function HorizontalWaveformDetail({
       ctx.shadowColor = _isPlaying ? 'rgba(255,255,255,0.6)' : 'transparent'
       ctx.shadowBlur = _isPlaying ? 3 * dprRef.current : 0
       ctx.strokeStyle = _isPlaying ? '#ffffff' : '#f6c177'
-      ctx.lineWidth = _isPlaying ? 1.5 : 2
+      ctx.lineWidth = _isPlaying ? 0.75 : 1
       ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke()
       ctx.fillStyle = _isPlaying ? '#ffffff' : '#f6c177'
       const triSize = Math.round(6 * dprRef.current)
@@ -306,7 +306,7 @@ export function HorizontalWaveformDetail({
     if (_hoverX !== null && !_isPlaying) {
       ctx.strokeStyle = 'rgba(255,255,255,0.3)'
       ctx.lineWidth = 1
-      ctx.setLineDash([4, 4])
+      ctx.setLineDash([2, 2])
       ctx.beginPath(); ctx.moveTo(_hoverX, 0); ctx.lineTo(_hoverX, h); ctx.stroke()
       ctx.setLineDash([])
     }
@@ -314,17 +314,17 @@ export function HorizontalWaveformDetail({
     // Zoom level indicator
     if (zoomRef.current > 1.05) {
       const label = `${zoomRef.current.toFixed(1)}×`
-      const pillFont = Math.round(10 * dprRef.current)
+      const pillFont = Math.round(5 * dprRef.current)
       ctx.font = `bold ${pillFont}px monospace`
       const tw = ctx.measureText(label).width
-      const pillX = w - tw - 16
-      const pillH = pillFont + 4
+      const pillX = w - tw - 8
+      const pillH = pillFont + 2
       ctx.fillStyle = 'rgba(246,193,119,0.85)'
       ctx.beginPath()
-      ctx.roundRect(pillX, h - pillH - 4, tw + 8, pillH, 4)
+      ctx.roundRect(pillX, h - pillH - 2, tw + 4, pillH, 2)
       ctx.fill()
       ctx.fillStyle = '#041014'
-      ctx.fillText(label, pillX + 4, h - 7)
+      ctx.fillText(label, pillX + 2, h - 3.5)
     }
   }, [])
 
