@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
 import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { Mixer } from './Mixer'
 import { ExportDialog } from './ExportDialog'
@@ -13,6 +14,8 @@ import { renderOffline } from '../audio/offlineRender'
 import { encodeWavFromAudioBuffer } from '../audio/wav'
 import { deleteBlob, getBlob, listProjects, putBlob, saveProject } from '../data/storage'
 import { exportProjectToFist, importProjectFromFist } from '../utils/fistProjectService'
+import { downloadFistPreset, fetchFistPresets } from '../utils/presetService'
+import type { FistPreset } from '../utils/presetService'
 import type { Take } from '../data/models'
 
 const FALLBACK_LOOP_BARS = 16
@@ -25,6 +28,24 @@ const UNDO_WINDOW_SEC = 6
 const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180
 
+// Collapsing reflows the page under the cursor, so pointerup can land on a different element
+// and the click event never fires. Commit the toggle on pointerdown instead.
+function sectionToggleHandlers(setOpen: Dispatch<SetStateAction<boolean>>) {
+  const toggle = () => setOpen((open) => !open)
+  return {
+    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+      event.stopPropagation()
+      toggle()
+    },
+    onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      toggle()
+    },
+  }
+}
+
 export default function App() {
   const {
     project,
@@ -34,6 +55,7 @@ export default function App() {
     armedTakeByBar,
     loopRange,
     audioUrl,
+    beatFile,
     setBeatMeta,
     setBar1AnchorTime,
     setBars,
@@ -94,12 +116,15 @@ export default function App() {
   const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
   const [showImportHelp, setShowImportHelp] = useState(false)
   const [showSetup, setShowSetup] = useState(true)
+  const [showProject, setShowProject] = useState(true)
+  const [showVolume, setShowVolume] = useState(true)
+  const upperSectionsOpen = showVolume || showSetup || showProject
+  const [showWaveform, setShowWaveform] = useState(true)
   // Firefox's AudioWorklet delivers empty input on some render quanta during sustained loud
   // input, silently corrupting recordings — confirmed unfixable from JS; recommend Chromium.
   const [showBrowserWarning, setShowBrowserWarning] = useState(() => /firefox/i.test(navigator.userAgent))
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [waveformResetKey, setWaveformResetKey] = useState(0)
-  const [activeBarPlayback, setActiveBarPlayback] = useState<{ barIndex: number; mode: 'play' | 'loop' } | undefined>(undefined)
   const [auditioningTakeId, setAuditioningTakeId] = useState<string | undefined>(undefined)
   const auditionTimer = useRef<number | null>(null)
   const [undoToast, setUndoToast] = useState<{ take: Take; index: number } | null>(null)
@@ -108,6 +133,10 @@ export default function App() {
   const pendingUndoRef = useRef<{ take: Take; index: number } | null>(null)
   const [isExportingProject, setIsExportingProject] = useState(false)
   const [projectToast, setProjectToast] = useState<string | null>(null)
+  const [fistPresets, setFistPresets] = useState<FistPreset[]>([])
+  const [presetsError, setPresetsError] = useState<string | null>(null)
+  const [selectedPresetId, setSelectedPresetId] = useState('')
+  const [isLoadingPreset, setIsLoadingPreset] = useState(false)
   const projectToastTimer = useRef<number | null>(null)
   const manualOffsetRef = useRef(false)
   const manualBpmRef = useRef(false)
@@ -119,11 +148,6 @@ export default function App() {
     [project.beat.durationSec, project.bars],
   )
   const audioLoaded = useMemo(() => Boolean(audioUrl && totalDuration > 0), [audioUrl, totalDuration])
-  // Before a grid exists the loop selects still need choices, so fall back to a nominal 16 bars.
-  const loopBarOptions = useMemo(
-    () => Array.from({ length: project.bars.length || FALLBACK_LOOP_BARS }, (_, index) => index),
-    [project.bars.length],
-  )
 
   useEffect(() => {
     vocalSyncMsRef.current = project.latencyOffsetMs
@@ -488,7 +512,6 @@ export default function App() {
     previousAudioTimeRef.current = null
     chainedThroughBarRef.current = -1
     setWaveformResetKey((key) => key + 1)
-    setActiveBarPlayback(undefined)
   }, [audioLoaded])
 
   const handleLoopChange = (start: number, end: number) => {
@@ -509,77 +532,21 @@ export default function App() {
     handleLoopChange(Math.min(loopRange?.start ?? end, end), end)
   }
 
-  const handleScrub = (value: number) => {
-    if (!audioLoaded || !totalDuration) return
-    const clamped = Math.min(Math.max(value, 0), totalDuration)
-    if (loopRange && (clamped < project.bars[loopRange.start]?.startSec || clamped > project.bars[loopRange.end]?.endSec)) {
-      setLoopRange({ start: 0, end: project.bars.length - 1 })
+  // Quick loop spans N bars from Bar 1; 0 turns looping off.
+  const applyQuickLoop = (bars: number) => {
+    if (!bars) {
+      setLoopEnabled(false)
+      return
     }
-    handleSeek(clamped)
-  }
-
-  const handlePlayFromBar = (barIndex: number) => {
-    if (!audioLoaded) return
-    const bar = project.bars[barIndex]
-    if (!bar) return
-      console.log('[Punchin] bar Play clicked', { barIndex, armedSlots: armedTakeByBar[barIndex] ?? [] })
-      setStatus(armedTakeByBar[barIndex]?.length ? `Preparing recording for Bar ${barIndex + 1}...` : `Playing Bar ${barIndex + 1}.`)
-    chainedThroughBarRef.current = -1
-    setCurrentBar(barIndex)
-    setActiveBarPlayback({ barIndex, mode: 'play' })
-    setLoopEnabled(false)
-    audioEngine.setLoop(undefined, undefined)
-    setPlayhead(bar.startSec)
-    setCursor(bar.startSec)
-    void startBarPlayback(barIndex, false)
-    setIsPlaying(true)
-    isPlayingRef.current = true
-  }
-
-  const handleLoopBar = (barIndex: number) => {
-      console.log('[Punchin] bar Loop clicked', { barIndex, armedSlots: armedTakeByBar[barIndex] ?? [] })
-      setStatus(armedTakeByBar[barIndex]?.length ? `Preparing loop recording for Bar ${barIndex + 1}...` : `Looping Bar ${barIndex + 1}.`)
-    if (!audioLoaded) return
-    const bar = project.bars[barIndex]
-    if (!bar) return
-    chainedThroughBarRef.current = -1
-    setCurrentBar(barIndex)
-    setActiveBarPlayback({ barIndex, mode: 'loop' })
-    setLoopRange({ start: barIndex, end: barIndex })
+    if (!project.bars.length) return
+    handleLoopChange(0, Math.min(bars - 1, project.bars.length - 1))
     setLoopEnabled(true)
-    audioEngine.setLoop(bar.startSec, bar.endSec)
-    setPlayhead(bar.startSec)
-    setCursor(bar.startSec)
-    void startBarPlayback(barIndex, true)
-    setIsPlaying(true)
-    isPlayingRef.current = true
   }
 
-  const startBarPlayback = async (barIndex: number, loop: boolean) => {
-    const bar = project.bars[barIndex]
-    if (!bar || !audioLoaded) return
-    const armedSlot = armedTakeByBar[barIndex]?.[0]
-    try {
-      if (armedSlot !== undefined) recordingPendingRef.current = true
-      if (armedSlot !== undefined) await audioEngine.prepareMicrophone()
-      if (armedSlot === undefined) {
-        audioEngine.play(bar.startSec)
-        void playSelectedTake(barIndex)
-        return
-      }
-      await beginAutomaticRecording(barIndex)
-      audioEngine.play(bar.startSec)
-      if (loop) setStatus(`Recording Take ${armedSlot + 1} for Bar ${barIndex + 1}. Loop once to create another take.`)
-    } catch (err) {
-      console.error('bar playback recording failed', err)
-      audioEngine.stop()
-      recordingTargetRef.current = null
-      recordingPendingRef.current = false
-      recordingActiveRef.current = false
-      setIsPlaying(false)
-      isPlayingRef.current = false
-      setStatus('Could not start bar recording. Check microphone permissions and input device.')
-    }
+  const isQuickLoopActive = (bars: number) => {
+    if (!bars) return !loopEnabled
+    if (!loopEnabled || !loopRange || loopRange.start !== 0) return false
+    return loopRange.end === Math.min(bars - 1, Math.max(project.bars.length - 1, 0))
   }
 
   async function beginAutomaticRecording(barIndex: number) {
@@ -1097,6 +1064,35 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    let cancelled = false
+    fetchFistPresets()
+      .then((presets) => { if (!cancelled) setFistPresets(presets) })
+      .catch((err) => {
+        console.error('preset list fetch failed', err)
+        if (!cancelled) setPresetsError('Could not load preset projects.')
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleLoadPreset = async (presetId: string) => {
+    const preset = fistPresets.find((p) => p.id === presetId)
+    if (!preset) return
+    setIsLoadingPreset(true)
+    setStatus(`Downloading \u201c${preset.title}\u201d\u2026`)
+    try {
+      const file = await downloadFistPreset(preset)
+      await handleImportProject(file)
+    } catch (err) {
+      console.error('preset download failed', err)
+      setStatus('Could not download that preset project.')
+      showProjectToast('Could not download that preset project.')
+    } finally {
+      setIsLoadingPreset(false)
+      setSelectedPresetId('')
+    }
+  }
+
   const handleExport = async (vocalsOnly: boolean) => {
     if (!project.beat.durationSec) return
     setExporting(true)
@@ -1135,19 +1131,22 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      <div className="header-stack">
+      <div className="app-main">
+        <div className="shell">
+          <div className="app-title-block">
+            <h2 className="app-title">PUNCH RAP</h2>
+            <div className="app-title-credit">
+              brought to you by{' '}
+              <a href="https://boxbap.com" target="_blank" rel="noopener noreferrer">BOXBAP</a>
+            </div>
+          </div>
+
+          <div className="sticky-transport-header">
+        <div className={`section-collapsible ${showWaveform ? '' : 'is-collapsed'}`}>
+        <div className="section-body">
+        {showWaveform ? (
         <div className="top-nav">
         <div className="nav-scrub">
-          <input
-            type="range"
-            min={0}
-            max={Math.max(totalDuration, 0.01)}
-            step={0.001}
-            value={Math.min(displayPos, totalDuration)}
-            onChange={(e) => handleScrub(Number(e.target.value))}
-            disabled={!audioLoaded}
-            title="Coarse scrub"
-          />
           <div className="nav-waveform-stage">
             <HorizontalWaveformDetail
               key={waveformResetKey}
@@ -1190,6 +1189,20 @@ export default function App() {
           </div>
         </div>
         </div>
+        ) : (
+          <div className="section-collapsed-bar">Waveform hidden</div>
+        )}
+        </div>
+        <button
+          type="button"
+          className={`section-tab ${showWaveform ? 'section-tab-open' : 'section-tab-collapsed'}`}
+          aria-expanded={showWaveform}
+          title={showWaveform ? 'Hide the waveform' : 'Show the waveform'}
+          {...sectionToggleHandlers(setShowWaveform)}
+        >
+          {showWaveform ? 'Hide' : 'Show'}
+        </button>
+        </div>
 
         <div className="playback-controls-panel">
         <div className="playback-play-group">
@@ -1198,42 +1211,34 @@ export default function App() {
             {isPlaying ? '⏸ Pause' : '▶ Play'}
           </button>
         </div>
-        <button
-          className={loopEnabled ? 'playback-wide-button loop-toggle-on' : 'secondary playback-wide-button'}
-          onClick={() => setLoopEnabled(!loopEnabled)}
-          disabled={!audioLoaded}
-          title={loopEnabled ? 'Loop is on — click to turn off' : 'Loop is off — click to turn on'}
-        >
-          {`\u21bb ${loopEnabled ? 'Loop Off' : 'Loop On'}`}{loopRange ? ` \u00b7 Bar ${loopRange.start + 1}-${loopRange.end + 1}` : ''}
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={!loopRange}
-          onClick={() => document.getElementById(`bar-row-${loopRange?.start ?? 0}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-        >
-          Show Loop
-        </button>
-        <label className="loop-range-select">
-          <span>Loop Start</span>
-          <select
-            value={loopRange?.start ?? 0}
-            onChange={(event) => handleLoopStartChange(Number(event.target.value))}
+        <div className="playback-loop-group">
+          <button
+            className={loopEnabled ? 'playback-wide-button loop-toggle-on' : 'secondary playback-wide-button'}
+            onClick={() => setLoopEnabled(!loopEnabled)}
+            disabled={!audioLoaded}
+            title={loopEnabled ? 'Loop is on — click to turn off' : 'Loop is off — click to turn on'}
           >
-            {loopBarOptions.map((index) => <option key={index} value={index}>Bar {index + 1}</option>)}
-          </select>
-        </label>
-        <label className="loop-range-select">
-          <span>Loop End</span>
-          <select
-            value={loopRange?.end ?? 0}
-            onChange={(event) => handleLoopEndChange(Number(event.target.value))}
+            {`\u21bb ${loopEnabled ? 'Loop Off' : 'Loop On'}`}{loopRange ? ` \u00b7 Bar ${loopRange.start + 1}-${loopRange.end + 1}` : ''}
+          </button>
+          <button
+            type="button"
+            className={loopEnabled ? 'playback-loop-eye loop-toggle-on' : 'secondary playback-loop-eye'}
+            disabled={!loopRange}
+            title="Scroll to the loop start bar"
+            aria-label="Scroll to the loop start bar"
+            onClick={() => document.getElementById(`bar-row-${loopRange?.start ?? 0}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
           >
-            {loopBarOptions.map((index) => <option key={index} value={index}>Bar {index + 1}</option>)}
-          </select>
-        </label>
+            {'\u{1F441}'}
+          </button>
+        </div>
         </div>
 
+        <section className={`panel volume-panel section-collapsible ${showVolume ? '' : 'is-collapsed'}`}>
+        <div className="section-body">
+        <div className="collapsible-header">
+          <span className="collapsible-title">Volume</span>
+        </div>
+        {showVolume && (
         <Mixer
           mix={project.mix}
           onMasterGain={(v) => updateMix({ masterBeatGain: v })}
@@ -1249,8 +1254,6 @@ export default function App() {
           }}
           monitorEnabled={monitorEnabled}
           monitorGain={monitorGain}
-          takesCount={project.takes.length}
-          onDeleteAllTakes={handleDeleteAllTakes}
           onToggleMonitor={() => {
             if (monitorEnabled) {
               audioEngine.setMonitorGain(0)
@@ -1270,17 +1273,155 @@ export default function App() {
             audioEngine.setMonitorGain(v)
           }}
         />
-      </div>
-
-      <div className="app-main">
-        <div className="shell">
-          <div className="app-title-block">
-            <h2 className="app-title">PUNCH RAP</h2>
-            <div className="app-title-credit">
-              brought to you by{' '}
-              <a href="https://boxbap.com" target="_blank" rel="noopener noreferrer">BOXBAP</a>
-            </div>
+        )}
+        </div>
+        <button
+          type="button"
+          className={`section-tab ${showVolume ? 'section-tab-open' : 'section-tab-collapsed'}`}
+          aria-expanded={showVolume}
+          title={showVolume ? 'Hide Volume' : 'Show Volume'}
+          {...sectionToggleHandlers(setShowVolume)}
+        >
+          {showVolume ? 'Hide' : 'Show'}
+        </button>
+        </section>
           </div>
+
+          <section className={`panel project-export-panel section-collapsible ${showProject ? '' : 'is-collapsed'}`}>
+            <div className="section-body">
+            <div className="collapsible-header">
+              <span className="collapsible-title">Import / Export</span>
+            </div>
+            {showProject && (
+              <div className="project-export-grid">
+                <div className="project-quadrant">
+                  <div className="project-quadrant-header">
+                    <span className="project-quadrant-title">Start with a Preset Session</span>
+                    <p className="project-quadrant-desc">Load a pre-configured project template and jump straight into recording.</p>
+                  </div>
+                  <div className="project-quadrant-controls">
+                    <div className="project-preset-row">
+                      <select
+                        id="fist-preset-select"
+                        className="project-preset-select"
+                        value={selectedPresetId}
+                        disabled={isLoadingPreset || !fistPresets.length}
+                        title="Load a preset project from the shared PunchRap library"
+                        onChange={(event) => {
+                          const presetId = event.target.value
+                          setSelectedPresetId(presetId)
+                          if (presetId) void handleLoadPreset(presetId)
+                        }}
+                      >
+                        <option value="">
+                          {presetsError ? presetsError : fistPresets.length ? 'Choose a preset\u2026' : 'No presets available'}
+                        </option>
+                        {fistPresets.map((preset) => (
+                          <option key={preset.id} value={preset.id} title={preset.title}>
+                            {preset.title.length > 40 ? `${preset.title.slice(0, 40)}...` : preset.title}
+                          </option>
+                        ))}
+                      </select>
+                      {isLoadingPreset && <span className="button-spinner" aria-hidden="true" />}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="project-quadrant">
+                  <div className="project-quadrant-header">
+                    <span className="project-quadrant-title">Use Your Own Beat</span>
+                    <p className="project-quadrant-desc">Upload a local audio file (WAV, MP3) from your computer to start a custom session.</p>
+                  </div>
+                  <div className="project-quadrant-controls">
+                    <label className="io-button" title="Choose an audio file from your computer">
+                      Choose File
+                      <input type="file" accept={AUDIO_ACCEPT} onChange={(e) => handleFile(e.target.files?.[0])} />
+                    </label>
+                    <input
+                      type="text"
+                      className="project-file-path"
+                      readOnly
+                      value={beatFile?.name ?? ''}
+                      placeholder="No file selected"
+                      aria-label="Selected beat file"
+                    />
+                  </div>
+                </div>
+
+                <div className="project-quadrant">
+                  <div className="project-quadrant-header">
+                    <span className="project-quadrant-title">Project Backup &amp; Recovery</span>
+                    <p className="project-quadrant-desc">Save or restore complete PunchRap (.fist) workspace files.</p>
+                  </div>
+                  <div className="project-quadrant-controls">
+                    <div className="project-name-row">
+                      <span className="project-subsection-title">Project Name:</span>
+                      <input
+                        type="text"
+                        className="project-name-input"
+                        value={project.name}
+                        maxLength={80}
+                        placeholder="My PunchRap Beat"
+                        aria-label="Project name"
+                        title="Used as the .fist export file name"
+                        onChange={(event) => setProjectName(event.target.value)}
+                      />
+                    </div>
+                    <div className="project-button-stack">
+                      <button
+                        type="button"
+                        className="io-button"
+                        disabled={!project.beat.fileId || isExportingProject}
+                        title="Save the beat, bar grid, and every take into one .fist file"
+                        onClick={handleExportProject}
+                      >
+                        {isExportingProject && <span className="button-spinner" aria-hidden="true" />}
+                        {isExportingProject ? 'Packing .fist\u2026' : 'Export Entire Project (.fist)'}
+                      </button>
+                      <label className="io-button" title="Load a previously exported .fist project">
+                        Import Entire Project
+                        <input
+                          type="file"
+                          accept={PROJECT_ACCEPT}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0]
+                            event.target.value = ''
+                            if (file) void handleImportProject(file)
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="project-quadrant">
+                  <div className="project-quadrant-header">
+                    <span className="project-quadrant-title">Export Vocal Recordings</span>
+                    <p className="project-quadrant-desc">Export your recorded takes as clean audio stems.</p>
+                  </div>
+                  <div className="project-quadrant-controls">
+                    <ExportDialog
+                      onExportMix={() => handleExport(false)}
+                      onExportVocals={() => handleExport(true)}
+                      progress={exportProgress}
+                      isRendering={exporting}
+                      disabled={!project.beat.durationSec}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+            </div>
+            <button
+              type="button"
+              className={`section-tab ${showProject ? 'section-tab-open' : 'section-tab-collapsed'}`}
+              aria-expanded={showProject}
+              title={showProject ? 'Hide Import / Export' : 'Show Import / Export'}
+              {...sectionToggleHandlers(setShowProject)}
+            >
+              {showProject ? 'Hide' : 'Show'}
+            </button>
+          </section>
 
           {showBrowserWarning && (
             <div className="browser-warning">
@@ -1294,58 +1435,17 @@ export default function App() {
             </div>
           )}
 
-          <section className={`setup-stack ${showSetup ? '' : 'setup-stack-collapsed'}`}>
-          <div className="setup-stack-header">
-            <div className="setup-project-group">
-            <label className="project-title-field">
-              <span className="collapsible-title">Project</span>
-              <input
-                type="text"
-                value={project.name}
-                maxLength={80}
-                placeholder="My PunchRap Beat"
-                aria-label="Project title"
-                title="Used as the .fist export file name"
-                onChange={(event) => setProjectName(event.target.value)}
-              />
-            </label>
-              <button
-                type="button"
-                className="secondary setup-import-button"
-                disabled={!project.beat.fileId || isExportingProject}
-                title="Save the beat, bar grid, and every take into one .fist file"
-                onClick={handleExportProject}
-              >
-                {isExportingProject && <span className="button-spinner" aria-hidden="true" />}
-                {isExportingProject ? 'Packing .fist\u2026' : 'Export Project (.fist)'}
-              </button>
-              <label className="secondary setup-import-button" title="Load a previously exported .fist project">
-                Import Project
-                <input
-                  type="file"
-                  accept={PROJECT_ACCEPT}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0]
-                    event.target.value = ''
-                    if (file) void handleImportProject(file)
-                  }}
-                />
-              </label>
+          <section className={`setup-stack section-collapsible ${showSetup ? '' : 'setup-stack-collapsed is-collapsed'}`}>
+          <div className="section-body">
+          {!showSetup && (
+            <div className="collapsible-header">
+              <span className="collapsible-title">Beat Setup</span>
             </div>
-            <div className="setup-project-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => setShowSetup((visible) => !visible)}
-              >
-                {showSetup ? 'Hide Setup' : 'Show Setup'}
-              </button>
-            </div>
-          </div>
+          )}
           {showSetup && <>
           <section className="panel beat-setup-panel">
-            <div className="beat-setup-header">
-              <span className="collapsible-title">BEAT SETUP</span>
+            <div className="collapsible-header">
+              <span className="collapsible-title">Beat Setup</span>
               <button
                 className="bwe-help collapsible-corner"
                 type="button"
@@ -1365,15 +1465,7 @@ export default function App() {
               </div>
             )}
             <div className="controls">
-              <input type="file" accept={AUDIO_ACCEPT} onChange={(e) => handleFile(e.target.files?.[0])} />
               {detectBusy && <span className="text-muted">Detecting BPM\u2026</span>}
-              <button
-                className="detect-bars-button"
-                onClick={handleAutoDetectBars}
-                disabled={detectBusy || !audioEngine.beatAudioBuffer}
-              >
-                {detectBusy ? 'Detecting\u2026' : 'Create Bars'}
-              </button>
               <div className="transport-bpm" onClick={(event) => event.stopPropagation()}>
                 <span>BPM</span>
                 <input
@@ -1407,15 +1499,16 @@ export default function App() {
                 />
               </label>
               <button
-                title="Set Bar 1 to the current audio position"
-                disabled={!audioLoaded}
+                title="Set Bar 1 to the current audio position and rebuild the grid"
+                disabled={!audioLoaded || detectBusy}
                 onClick={() => {
                   const position = isPlaying ? cursor : playhead
                   setBar1Anchor(position)
-                  setStatus(`Bar 1 set to ${position.toFixed(3)}s. Click Create Bars when ready.`)
+                  setStatus(`Bar 1 set to ${position.toFixed(3)}s. Building bars\u2026`)
+                  void handleAutoDetectBars()
                 }}
               >
-                Set Bar 1
+                {detectBusy ? 'Detecting\u2026' : 'Set Bar 1'}
               </button>
             </div>
           <div className="beat-setup-anchor">
@@ -1430,6 +1523,22 @@ export default function App() {
                 isPlaying={isPlaying}
                 getPlaybackTime={() => audioEngine.currentTime}
                 anchorOnly
+                quickLoopControl={(
+                  <div className="quick-loop-group" onClick={(event) => event.stopPropagation()}>
+                    <span className="bwe-ctrl-label">Loop</span>
+                    {([0, 1, 2, 4] as const).map((bars) => (
+                      <button
+                        key={bars}
+                        type="button"
+                        className={`secondary quick-loop-button ${isQuickLoopActive(bars) ? 'quick-loop-active' : ''}`}
+                        disabled={bars > 0 && !project.bars.length}
+                        onClick={() => applyQuickLoop(bars)}
+                      >
+                        {bars === 0 ? 'Off' : `${bars} Bar${bars > 1 ? 's' : ''}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 onEdgeChange={(startSec) => setBar1Anchor(startSec)}
               />
             )}
@@ -1479,6 +1588,16 @@ export default function App() {
           </div>
           </section>
           </>}
+          </div>
+          <button
+            type="button"
+            className={`section-tab ${showSetup ? 'section-tab-open' : 'section-tab-collapsed'}`}
+            aria-expanded={showSetup}
+            title={showSetup ? 'Hide Beat Setup' : 'Show Beat Setup'}
+            {...sectionToggleHandlers(setShowSetup)}
+          >
+            {showSetup ? 'Hide' : 'Show'}
+          </button>
           </section>
 
           <BarList
@@ -1490,11 +1609,7 @@ export default function App() {
             isRecording={isRecording}
             takes={project.takes}
             armedTakeByBar={armedTakeByBar}
-            activeBarPlayback={activeBarPlayback}
             auditioningTakeId={auditioningTakeId}
-            onPlayFromBar={handlePlayFromBar}
-            onLoopBar={handleLoopBar}
-            onStopBar={handleStop}
             onArmTake={(barIndex, slot) => {
               setCurrentBar(barIndex)
               armTake(barIndex, slot)
@@ -1526,16 +1641,18 @@ export default function App() {
             onSelectNoTake={handleSelectNoTake}
             onDeleteTake={handleDeleteTake}
             onToggleTakeLock={toggleTakeLock}
+            onSetLoopIn={handleLoopStartChange}
+            onSetLoopOut={handleLoopEndChange}
+            onDeleteAllTakes={handleDeleteAllTakes}
+            focusMode={!upperSectionsOpen}
+            onToggleFocus={() => {
+              const next = !upperSectionsOpen
+              setShowVolume(next)
+              setShowSetup(next)
+              setShowProject(next)
+            }}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
-          />
-
-          <ExportDialog
-            onExportMix={() => handleExport(false)}
-            onExportVocals={() => handleExport(true)}
-            progress={exportProgress}
-            isRendering={exporting}
-            disabled={!project.beat.durationSec}
           />
         </div>
       </div>

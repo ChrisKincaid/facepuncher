@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import type { Bar, Take } from '../data/models'
 import { BarWaveformBackdrop } from './BarWaveformBackdrop'
 import { TakeSlots } from './TakeSlots'
 import { DragVolumeSlider } from './DragVolumeSlider'
+
+type BarScale = 1 | 2 | 4
 
 interface Props {
   bars: Bar[]
@@ -12,11 +15,7 @@ interface Props {
   isRecording: boolean
   takes: Take[]
   armedTakeByBar: Record<number, number[]>
-  activeBarPlayback?: { barIndex: number; mode: 'play' | 'loop' }
   auditioningTakeId?: string
-  onPlayFromBar: (barIndex: number) => void
-  onLoopBar: (barIndex: number) => void
-  onStopBar: () => void
   onArmTake: (barIndex: number, slot: number) => void
   onDisarmTake: (barIndex: number, slot?: number) => void
   onSelectTake: (barIndex: number, takeId: string) => void
@@ -24,6 +23,11 @@ interface Props {
   onSelectNoTake: (barIndex: number) => void
   onDeleteTake: (takeId: string) => void
   onToggleTakeLock: (takeId: string) => void
+  onSetLoopIn: (barIndex: number) => void
+  onSetLoopOut: (barIndex: number) => void
+  onDeleteAllTakes: () => void
+  focusMode: boolean
+  onToggleFocus: () => void
   onFocusBar: (barIndex: number) => void
   onTakeGain: (takeId: string, value: number) => void
 }
@@ -37,33 +41,81 @@ export function BarList({
   isRecording,
   takes,
   armedTakeByBar,
-  activeBarPlayback,
   auditioningTakeId,
-  onPlayFromBar,
-  onLoopBar,
-  onStopBar,
   onArmTake,
   onDisarmTake,
   onSelectTake,
   onAuditionTake,
   onSelectNoTake,
   onDeleteTake,
-  onToggleTakeLock,  onFocusBar,
+  onToggleTakeLock,
+  onSetLoopIn,
+  onSetLoopOut,
+  onDeleteAllTakes,
+  focusMode,
+  onToggleFocus,
+  onFocusBar,
   onTakeGain,
 }: Props) {
+  const [barScale, setBarScale] = useState<BarScale>(1)
   return (
     <div className="panel bar-list-panel">
       <div className="collapsible-header" style={{ marginBottom: 6 }}>
+        <div className="bar-scale-controls" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className={`secondary bar-focus-button ${focusMode ? 'bar-focus-on' : ''}`}
+            aria-pressed={focusMode}
+            title={focusMode ? 'Reopen the sections above' : 'Collapse the sections above to focus on bars'}
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onToggleFocus()
+            }}
+          >
+            {focusMode ? 'Show All' : 'Focus Bars'}
+          </button>
+          <button
+            type="button"
+            className="secondary bar-delete-all"
+            disabled={!takes.length}
+            title="Delete all takes across every bar"
+            onClick={onDeleteAllTakes}
+          >
+            Delete All Takes
+          </button>
+          <span className="bar-header-divider" aria-hidden="true" />
+          <span className="bar-scale-label">Bar Height</span>
+          <button
+            type="button"
+            className={`secondary bar-scale-button ${barScale === 1 ? 'bar-scale-disabled' : ''}`}
+            aria-label="Shorter bar rows"
+            title="Shorter bar rows"
+            onClick={() => setBarScale((scale) => (scale === 4 ? 2 : 1))}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className={`secondary bar-scale-button ${barScale === 4 ? 'bar-scale-disabled' : ''}`}
+            aria-label="Taller bar rows"
+            title="Taller bar rows"
+            onClick={() => setBarScale((scale) => (scale === 1 ? 2 : 4))}
+          >
+            +
+          </button>
+        </div>
         <span className="collapsible-title">Bars</span>
       </div>
 
-      <div className="bar-list">
+      <div className={`bar-list bar-scale-${barScale}x`}>
         {bars.map((bar) => {
           const active = playhead >= bar.startSec && playhead < bar.endSec
           const inLoop = loopRange && bar.index >= loopRange.start && bar.index <= loopRange.end
           const barTakes = takes.filter((t) => t.barIndex === bar.index)
-          const activePlayback = activeBarPlayback?.barIndex === bar.index ? activeBarPlayback.mode : null
           const selectedTake = barTakes.find((t) => t.selected)
+          const isLoopIn = loopRange?.start === bar.index
+          const isLoopOut = loopRange?.end === bar.index
           return (
             <div
               key={bar.index}
@@ -72,6 +124,7 @@ export function BarList({
               onClick={() => onFocusBar(bar.index)}
             >
               <div className="bar-main-row">
+              <div className="bar-controls-left">
               <div className="bar-meta">
                 <div className="bar-num">Bar {bar.index + 1}</div>
                 <div
@@ -93,6 +146,32 @@ export function BarList({
                   onDelete={onDeleteTake}
                 />
               </div>
+              <div className="bar-take-actions" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className={`secondary bar-fav-button ${selectedTake?.locked ? 'bar-fav-on' : ''}`}
+                  disabled={!selectedTake}
+                  aria-pressed={selectedTake?.locked ?? false}
+                  title={!selectedTake
+                    ? 'Select a take to favorite it'
+                    : selectedTake.locked
+                      ? 'Unfavorite \u2014 allows this take to be deleted'
+                      : 'Favorite \u2014 protects this take from deletion'}
+                  onClick={() => selectedTake && onToggleTakeLock(selectedTake.takeId)}
+                >
+                  {selectedTake?.locked ? '\u2605' : '\u2606'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary bar-delete-button"
+                  disabled={!selectedTake}
+                  title={selectedTake?.locked ? 'Favorited take \u2014 unfavorite it to delete' : 'Delete active take'}
+                  onClick={() => selectedTake && onDeleteTake(selectedTake.takeId)}
+                >
+                  X
+                </button>
+              </div>
+              </div>
               <div className="bar-gains" onClick={(e) => e.stopPropagation()}>
                 <div className="bar-gain-row">
                   <div className="bar-slider-waveform">
@@ -108,47 +187,24 @@ export function BarList({
                   <span className="text-muted bar-gain-value">{(selectedTake?.gain ?? 1).toFixed(2)}</span>
                 </div>
               </div>
-              <div className="bar-row-actions" onClick={(e) => e.stopPropagation()}>
+              <div className="bar-loop-segment" onClick={(e) => e.stopPropagation()}>
                 <button
-                  className="secondary"
-                  onClick={() => {
-                    if (activePlayback === 'play') onStopBar()
-                    else onPlayFromBar(bar.index)
-                  }}
+                  type="button"
+                  className={`secondary bar-loop-in ${isLoopIn ? 'active-loop-in' : ''}`}
+                  aria-pressed={isLoopIn}
+                  title={`Set loop start to Bar ${bar.index + 1}`}
+                  onClick={() => onSetLoopIn(bar.index)}
                 >
-                  {activePlayback === 'play' ? 'Stop' : 'Play From'}
-                </button>
-                <button
-                  className="secondary"
-                  onClick={() => {
-                    if (activePlayback === 'loop') onStopBar()
-                    else onLoopBar(bar.index)
-                  }}
-                >
-                  {activePlayback === 'loop' ? 'Stop' : 'Loop'}
+                  IN
                 </button>
                 <button
                   type="button"
-                  className={`secondary bar-fav-button ${selectedTake?.locked ? 'bar-fav-on' : ''}`}
-                  disabled={!selectedTake}
-                  aria-pressed={selectedTake?.locked ?? false}
-                  title={!selectedTake
-                    ? 'Select a take to favorite it'
-                    : selectedTake.locked
-                      ? 'Unfavorite — allows this take to be deleted'
-                      : 'Favorite — protects this take from deletion'}
-                  onClick={() => selectedTake && onToggleTakeLock(selectedTake.takeId)}
+                  className={`secondary bar-loop-out ${isLoopOut ? 'active-loop-out' : ''}`}
+                  aria-pressed={isLoopOut}
+                  title={`Set loop end to Bar ${bar.index + 1}`}
+                  onClick={() => onSetLoopOut(bar.index)}
                 >
-                  {selectedTake?.locked ? '★' : '☆'}
-                </button>
-                <button
-                  type="button"
-                  className="secondary bar-delete-button"
-                  disabled={!selectedTake}
-                  title={selectedTake?.locked ? 'Favorited take — unfavorite it to delete' : 'Delete active take'}
-                  onClick={() => selectedTake && onDeleteTake(selectedTake.takeId)}
-                >
-                  X
+                  OUT
                 </button>
               </div>
               </div>

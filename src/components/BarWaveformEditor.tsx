@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 
 interface Props {
   /** Pre-decoded buffer from audioEngine — avoids re-fetching the whole file */
@@ -12,6 +13,8 @@ interface Props {
   getPlaybackTime?: () => number
   onEdgeChange: (start: number, end: number, allowGaps: boolean) => void
   anchorOnly?: boolean
+  /** Rendered inline in the nudge toolbar row. */
+  quickLoopControl?: ReactNode
 }
 
 const HIT = 16   // px hit-test tolerance for drag handles
@@ -452,7 +455,7 @@ export function BarWaveformEditor(props: Props) {
                 const value = e.target.value
                 setNudgeMode(value === 'zero-crossing' ? value : Number(value))
               }}
-              style={{ fontSize: 11, padding: '2px 5px' }}
+              className="bwe-nudge-select"
             >
               <option value="5">5 ms</option>
               <option value="10">10 ms</option>
@@ -462,6 +465,7 @@ export function BarWaveformEditor(props: Props) {
               <option value="zero-crossing">Zero crossing</option>
             </select>
           </label>
+          {props.quickLoopControl}
           {!props.anchorOnly && <>
             <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
               <input

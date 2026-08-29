@@ -11,8 +11,6 @@ interface Props {
   monitorGain: number
   onToggleMonitor: () => void
   onMonitorGain: (value: number) => void
-  takesCount: number
-  onDeleteAllTakes: () => void
 }
 
 function ChannelStrip({
@@ -72,8 +70,6 @@ export function Mixer({
   monitorGain,
   onToggleMonitor,
   onMonitorGain,
-  takesCount,
-  onDeleteAllTakes,
 }: Props) {
   // Beat muting is a transient UI convenience — remember the pre-mute value locally and
   // restore it on unmute rather than adding persisted mute state to the project.
@@ -109,15 +105,6 @@ export function Mixer({
             <ChannelStrip label="Mic Vol" value={monitorGain} max={2} onChange={onMonitorGain} />
             <MuteButton muted={!monitorEnabled} onToggle={onToggleMonitor} label="Mic Monitor" />
           </div>
-          <button
-            type="button"
-            className="mixer-delete-all"
-            disabled={!takesCount}
-            onClick={onDeleteAllTakes}
-            title="Delete all takes across every bar"
-          >
-            Delete All Takes
-          </button>
       </div>
     </div>
   )
