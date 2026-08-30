@@ -2283,7 +2283,40 @@ input[type='file'] {
   }
 
   .bar-scale-controls {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    margin-bottom: 6px;
+  }
+
+  .bar-scale-controls button {
+    min-height: 26px;
+    padding: 5px 9px;
+    font-size: 9px;
+  }
+
+  .bar-scale-button {
+    min-width: 26px;
+    font-size: 12px;
+  }
+
+  .bar-scale-label {
+    font-size: 9px;
+  }
+
+  .bar-header-divider {
     display: none;
+  }
+
+  /* The header is absolutely positioned on desktop; stacking it here keeps the title
+     and the controls from overlapping once the controls span the full width. */
+  .bar-list-panel .collapsible-header {
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
   }
 
   /* ── accordion ── */
@@ -2307,9 +2340,11 @@ input[type='file'] {
   }
 
   /* ── portrait fitting ── */
+  /* clip, not hidden: overflow:hidden on an ancestor turns it into a scroll container,
+     which silently kills position:sticky on the transport header. */
   body,
   .shell {
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   .top-nav,
@@ -2318,7 +2353,7 @@ input[type='file'] {
   .bar1-anchor-canvas {
     width: 100%;
     max-width: 100%;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   /* ── wrapped, centred control groups ── */
@@ -2357,7 +2392,7 @@ input[type='file'] {
     align-items: stretch;
     width: 100%;
     max-width: 100%;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   .beat-setup-panel > *,
@@ -2392,18 +2427,31 @@ input[type='file'] {
     justify-content: center;
   }
 
+  /* One row, every button an equal share of the full width — never wrapped or split. */
+  .playback-sync-buttons {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 3px;
+    width: 100%;
+  }
+
   .playback-sync-buttons button {
-    flex: 1 1 60px;
+    width: auto;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 2px;
+    font-size: clamp(0.4rem, 1.9vw, 0.7rem);
+    white-space: nowrap;
+    overflow: hidden;
   }
 
-  /* Reset is a sibling of the nudge steps in the DOM; ordering it last and forcing a
-     full basis gives it its own row without changing the desktop markup. */
-  .playback-sync-reset {
-    order: 99;
-    flex: 1 0 100%;
+  .playback-sync-buttons .playback-sync-divider {
+    display: none;
   }
 
-  .playback-sync-buttons .playback-sync-divider:last-of-type {
+  /* Chevrons cost width the labels need to stay legible in one row. */
+  .playback-sync-buttons .sync-arrow {
     display: none;
   }
 
