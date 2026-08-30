@@ -10,6 +10,7 @@ import { generateBars } from '../analysis/bpmGrid'
 import { estimateBpmFromBuffer } from '../analysis/onsetEstimate'
 import { formatTime } from '../utils/time'
 import { audioEngine } from '../audio/audioEngine'
+import type { BleedCancelPreset } from '../audio/audioEngine'
 import { renderOffline } from '../audio/offlineRender'
 import { encodeWavFromAudioBuffer } from '../audio/wav'
 import { deleteBlob, getBlob, listProjects, putBlob, saveProject } from '../data/storage'
@@ -28,10 +29,62 @@ const UNDO_WINDOW_SEC = 6
 const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180
 
+type HelpTopic = 'volume' | 'project' | 'setup' | 'bars'
+
+const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; text: string }[] }> = {
+  volume: {
+    title: 'Volume',
+    entries: [
+      { term: 'Beat Vol', text: 'Level of the backing track in the mix. Lower it if the beat is burying your vocals.' },
+      { term: 'Vocal Vol', text: 'Level of every recorded take together. Per-take volume lives on each bar row.' },
+      { term: 'Mute', text: 'Silences that channel without changing its slider, so you can A/B quickly.' },
+      { term: 'Mic Vol', text: 'Live monitoring — hear yourself while recording. Use headphones; on open speakers this will feed back.' },
+    ],
+  },
+  project: {
+    title: 'Import / Export',
+    entries: [
+      { term: 'Start with a Preset', text: 'Loads a ready-made session from the shared library, beat and bar grid included.' },
+      { term: 'Use Your Own Beat', text: 'Choose an audio file (WAV, MP3, M4A) under 10 minutes to start a custom session.' },
+      { term: 'Export Entire Project', text: 'Packs the beat, bar grid, and every take into one .fist file — your full backup.' },
+      { term: 'Import Entire Project', text: 'Restores a .fist file exactly as it was saved, replacing the current session.' },
+      { term: 'Export Vocals Only', text: 'Renders just your takes as a stem, for mixing elsewhere.' },
+      { term: 'Export Vocals + Music Mix', text: 'Renders the finished song: beat and vocals together.' },
+    ],
+  },
+  setup: {
+    title: 'Beat Setup',
+    entries: [
+      { term: 'BPM', text: 'Type a tempo and press Enter, or use the ×2 / ÷2 and nudge buttons. Tap sets it by feel.' },
+      { term: 'Auto BPM', text: 'Detects the tempo from the audio. It never moves your Bar 1 anchor.' },
+      { term: 'Set Bar 1', text: 'Anchors the grid so Bar 1 starts at the current play position. Everything else follows from here.' },
+      { term: 'Offset', text: 'The same anchor as a typed number, in seconds from the start of the file.' },
+      { term: 'Metronome', text: 'Click track locked to your BPM and Bar 1. Accented on beat 1 of each bar.' },
+      { term: 'Bleed Cancel', text: 'For recording on speakers: subtracts the backing track out of the mic signal. Light / Standard / Heavy set how aggressively.' },
+      { term: 'Calibrate Mic Timing', text: 'Plays a test click and listens for it to measure your round-trip delay, then sets the offset automatically. Needs speakers, not headphones.' },
+      { term: 'Shift Vocals', text: 'Manual latency offset. Nudge earlier or later if takes sit slightly off the beat.' },
+    ],
+  },
+  bars: {
+    title: 'Bars & Takes',
+    entries: [
+      { term: 'Takes', text: 'Each bar holds up to 5 recorded take slots. Tap an empty slot to arm it for recording.' },
+      { term: 'Playback & Swap', text: 'Tap a take to make it the active one, so you can audition different vocal passes during loop playback.' },
+      { term: 'Actions', text: 'The ⇄ button on a bar opens Copy, Cut, and Delete. Copying or cutting a take activates cyan PASTE buttons across every valid destination bar.' },
+      { term: 'Drag & Drop', text: 'Drag a take onto another bar to move it. Bars already holding 5 takes will refuse the drop.' },
+      { term: 'Favorite / Lock', text: 'Star your best takes to lock them in place, protecting them while you record new passes.' },
+    ],
+  },
+}
+
 // Collapsing reflows the page under the cursor, so pointerup can land on a different element
 // and the click event never fires. Commit the toggle on pointerdown instead.
 function sectionToggleHandlers(setOpen: Dispatch<SetStateAction<boolean>>) {
-  const toggle = () => setOpen((open) => !open)
+  return sectionActionHandlers(() => setOpen((open) => !open))
+}
+
+// Same pointerdown semantics for toggles that need custom logic rather than a setter.
+function sectionActionHandlers(toggle: () => void) {
   return {
     onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
       event.preventDefault()
@@ -74,6 +127,10 @@ export default function App() {
     clearTakeSelection,
     deleteTake,
     restoreTake,
+    relocateTake,
+    placeTake,
+    clipboardTake,
+    setClipboardTake,
     deleteAllTakes,
     toggleTakeLock,
     setTakeGain,
@@ -115,21 +172,73 @@ export default function App() {
   const [metronomeEnabled, setMetronomeEnabled] = useState(false)
   const [metronomeVolume, setMetronomeVolume] = useState(0.5)
   const [bleedCancelEnabled, setBleedCancelEnabled] = useState(false)
+  const [bleedCancelPreset, setBleedCancelPreset] = useState<BleedCancelPreset>('standard')
   // stopRecordingFlow runs from a setTimeout captured in an earlier render, so reading
   // the state directly there would use whatever the toggle was when recording started.
   const bleedCancelEnabledRef = useRef(bleedCancelEnabled)
   useEffect(() => { bleedCancelEnabledRef.current = bleedCancelEnabled }, [bleedCancelEnabled])
+  const bleedCancelPresetRef = useRef(bleedCancelPreset)
+  useEffect(() => { bleedCancelPresetRef.current = bleedCancelPreset }, [bleedCancelPreset])
   const [isCalibratingMic, setIsCalibratingMic] = useState(false)
   const [showCalibrationModal, setShowCalibrationModal] = useState(false)
   const [calibrationCountdown, setCalibrationCountdown] = useState(0)
   const [detectBusy, setDetectBusy] = useState(false)
   const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
-  const [showImportHelp, setShowImportHelp] = useState(false)
+  const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null)
   const [showSetup, setShowSetup] = useState(true)
   const [showProject, setShowProject] = useState(true)
   const [showVolume, setShowVolume] = useState(true)
+  const [showBars, setShowBars] = useState(true)
+  const [isMobileLayout, setIsMobileLayout] = useState(() => window.matchMedia('(max-width: 768px)').matches)
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 768px)')
+    const sync = (event: MediaQueryListEvent) => setIsMobileLayout(event.matches)
+    query.addEventListener('change', sync)
+    return () => query.removeEventListener('change', sync)
+  }, [])
+
+  // Below 768px these three behave as an accordion so only one eats vertical space at a
+  // time. Volume stays out of it — it's meant to remain reachable at the top.
+  const toggleAccordionPanel = (panel: 'setup' | 'project' | 'bars') => {
+    const isOpen = panel === 'setup' ? showSetup : panel === 'project' ? showProject : showBars
+    if (!isMobileLayout) {
+      if (panel === 'setup') setShowSetup(!isOpen)
+      else if (panel === 'project') setShowProject(!isOpen)
+      else setShowBars(!isOpen)
+      return
+    }
+    setShowSetup(!isOpen && panel === 'setup')
+    setShowProject(!isOpen && panel === 'project')
+    setShowBars(!isOpen && panel === 'bars')
+  }
+
   const upperSectionsOpen = showVolume || showSetup || showProject
   const focusScrollAnchorRef = useRef<{ id: string; top: number } | null>(null)
+  const pendingFocusBarRef = useRef<number | null>(null)
+  const stickyHeaderRef = useRef<HTMLDivElement | null>(null)
+
+  // The sticky header overlaps the top of the page, so both the snap offset and the
+  // scroll target have to account for its live height.
+  useEffect(() => {
+    const header = stickyHeaderRef.current
+    if (!header) return
+    const apply = () => {
+      document.documentElement.style.setProperty('--sticky-header-height', `${Math.round(header.getBoundingClientRect().height)}px`)
+    }
+    apply()
+    const observer = new ResizeObserver(apply)
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [])
+
+  const scrollBarToTop = (barIndex: number) => {
+    const row = document.getElementById(`bar-row-${barIndex}`)
+    if (!row) return
+    const headerHeight = stickyHeaderRef.current?.getBoundingClientRect().height ?? 0
+    const top = window.scrollY + row.getBoundingClientRect().top - headerHeight
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  }
 
   // Collapsing the sections above the bar list changes the document height, which would
   // otherwise slide a different bar under the user's eyes. Record which bar row is
@@ -150,6 +259,15 @@ export default function App() {
 
   // Runs before paint so the correction is never visible as a jump.
   useLayoutEffect(() => {
+    // Entering BARS ONLY deliberately re-frames the view on the loop start instead of
+    // holding the previous position, so that intent wins over anchor restoration.
+    const targetBar = pendingFocusBarRef.current
+    if (targetBar !== null) {
+      pendingFocusBarRef.current = null
+      focusScrollAnchorRef.current = null
+      scrollBarToTop(targetBar)
+      return
+    }
     const anchor = focusScrollAnchorRef.current
     if (!anchor) return
     focusScrollAnchorRef.current = null
@@ -172,6 +290,7 @@ export default function App() {
   const undoTimer = useRef<number | null>(null)
   const pendingUndoRef = useRef<{ take: Take; index: number } | null>(null)
   const [isExportingProject, setIsExportingProject] = useState(false)
+  const [pendingOverwrite, setPendingOverwrite] = useState<{ run: () => void } | null>(null)
   const [projectToast, setProjectToast] = useState<string | null>(null)
   const [projectToastEmphasis, setProjectToastEmphasis] = useState(false)
   const [fistPresets, setFistPresets] = useState<FistPreset[]>([])
@@ -201,6 +320,13 @@ export default function App() {
   useEffect(() => {
     bar1AnchorRef.current = project.beat.bar1AnchorTime
   }, [project.beat.bar1AnchorTime])
+
+  useEffect(() => {
+    if (!helpTopic) return
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setHelpTopic(null) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [helpTopic])
 
   useEffect(() => {
     saveProject(project).catch((err) => console.error('autosave failed', err))
@@ -340,6 +466,10 @@ export default function App() {
         if (beatBlob) {
           blobCache.current.set(latest.beat.fileId, beatBlob)
           setAudioUrl(URL.createObjectURL(beatBlob))
+          // Without this the engine has no decoded beat after a refresh, so the project
+          // looks restored but Play and the waveforms have nothing to work with.
+          await audioEngine.loadBeat(new File([beatBlob], 'main_beat', { type: beatBlob.type || 'audio/wav' }))
+          setWaveformResetKey((key) => key + 1)
         }
         await Promise.all(
           latest.takes.map(async (take) => {
@@ -425,17 +555,17 @@ export default function App() {
     const anchor = bar1AnchorRef.current ?? project.bars[0]?.startSec ?? project.beat.bar1AnchorTime
     bar1AnchorRef.current = anchor
     setBeatMeta({ ...project.beat, bpm: clamped, bar1AnchorTime: anchor })
-    if (project.beat.durationSec && project.bars.length) {
+    // Builds the grid even when none exists yet, so a typed tempo stands on its own
+    // instead of needing Auto BPM to have produced bars first.
+    if (project.beat.durationSec) {
       setBars(generateBars(project.beat.durationSec, clamped, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, project.beat.offsetSec ?? 0, anchor))
     }
   }
 
+  // Typing only moves the text; committing on blur/Enter is what retimes the grid, so a
+  // partially typed "8" on the way to "84" never rebuilds bars at 8 BPM.
   const handleBpmInput = (value: string) => {
     setBpmInput(value)
-    const bpm = Number(value)
-    if (!value || !Number.isFinite(bpm) || bpm <= 0) return
-    manualBpmRef.current = true
-    applyBpm(bpm)
   }
 
   const commitBpmInput = () => {
@@ -446,6 +576,7 @@ export default function App() {
     }
     manualBpmRef.current = true
     applyBpm(bpm)
+    setBpmInput(String(Math.max(1, Math.min(999, Math.round(bpm * 10) / 10))))
   }
 
   const handleTapTempo = () => {
@@ -937,6 +1068,90 @@ export default function App() {
     else audioEngine.cancelChainedForBar(target.barIndex)
   }
 
+  const BAR_FULL_MESSAGE = 'Bar Full \u2014 Max 5 Takes'
+
+  const barTakeCount = (barIndex: number) => project.takes.filter((take) => take.barIndex === barIndex).length
+
+  const handleTakeCopy = (takeId: string) => {
+    const take = project.takes.find((item) => item.takeId === takeId)
+    if (!take) return
+    setClipboardTake({ sourceTakeId: takeId, sourceBarIndex: take.barIndex, fileId: take.fileId, gain: take.gain, bleedCancelled: take.bleedCancelled, action: 'copy' })
+    showProjectToast(`Copied Take from Bar ${take.barIndex + 1} \u2014 tap PASTE on any bar.`)
+  }
+
+  const handleTakeCut = (takeId: string) => {
+    const take = project.takes.find((item) => item.takeId === takeId)
+    if (!take) return
+    if (take.locked) {
+      showProjectToast('This one\u2019s a keeper \u2014 tap the \u2605 to unfavorite it first.')
+      return
+    }
+    setClipboardTake({ sourceTakeId: takeId, sourceBarIndex: take.barIndex, fileId: take.fileId, gain: take.gain, bleedCancelled: take.bleedCancelled, action: 'cut' })
+    showProjectToast(`Cut Take from Bar ${take.barIndex + 1} \u2014 tap PASTE on any bar.`)
+  }
+
+  const handleClearClipboard = () => setClipboardTake(null)
+
+  const handleTakePaste = async (barIndex: number) => {
+    const clipboard = clipboardTake
+    if (!clipboard) return
+    if (barTakeCount(barIndex) >= 5) {
+      showProjectToast(BAR_FULL_MESSAGE)
+      return
+    }
+    // A bar armed for recording would otherwise capture over what was just pasted.
+    disarmTake(barIndex)
+    if (clipboard.action === 'cut') {
+      const moved = relocateTake(clipboard.sourceTakeId, barIndex)
+      if (!moved.ok) {
+        showProjectToast(moved.reason === 'bar-full' ? BAR_FULL_MESSAGE : 'Could not move that take.')
+        return
+      }
+      setClipboardTake(null)
+      applyLiveTakeChange(barIndex, clipboard.sourceTakeId)
+      showProjectToast(`Moved Take to Bar ${barIndex + 1}.`)
+      return
+    }
+    // Copy duplicates the audio under a fresh id: deleting a take purges its blob, so
+    // sharing one fileId between two takes would let either delete destroy both.
+    const blob = blobCache.current.get(clipboard.fileId) ?? await getBlob(clipboard.fileId)
+    if (!blob) {
+      showProjectToast('Could not read that take\u2019s audio.')
+      return
+    }
+    const fileId = `take-${crypto.randomUUID()}`
+    blobCache.current.set(fileId, blob)
+    void putBlob(fileId, blob)
+    const takeId = crypto.randomUUID()
+    const placed = placeTake(barIndex, {
+      takeId,
+      barIndex,
+      fileId,
+      gain: clipboard.gain,
+      selected: true,
+      bleedCancelled: clipboard.bleedCancelled,
+      createdAt: new Date().toISOString(),
+    })
+    if (!placed.ok) {
+      showProjectToast(placed.reason === 'bar-full' ? BAR_FULL_MESSAGE : 'Could not paste that take.')
+      return
+    }
+    applyLiveTakeChange(barIndex, takeId)
+    showProjectToast(`Pasted Take to Bar ${barIndex + 1}.`)
+  }
+
+  const handleTakeDropOnBar = (takeId: string, barIndex: number) => {
+    const take = project.takes.find((item) => item.takeId === takeId)
+    if (!take || take.barIndex === barIndex) return
+    const moved = relocateTake(takeId, barIndex)
+    if (!moved.ok) {
+      showProjectToast(moved.reason === 'bar-full' ? BAR_FULL_MESSAGE : 'Could not move that take.')
+      return
+    }
+    applyLiveTakeChange(barIndex, takeId)
+    showProjectToast(`Moved Take to Bar ${barIndex + 1}.`)
+  }
+
   const handleUndoDelete = () => {
     const pending = pendingUndoRef.current
     if (!pending) return
@@ -1019,12 +1234,13 @@ export default function App() {
     const bleedCancelActive = bleedCancelEnabledRef.current
     console.log('%c[BLEED] stopRecordingFlow gate', 'color:#fff;background:#527;padding:2px 6px', {
       toggleEnabled: bleedCancelActive,
+      preset: bleedCancelPresetRef.current,
       hasTargetBar: !!targetBar,
       hasBeatBuffer: !!audioEngine.beatAudioBuffer,
       latencyOffsetMs: vocalSyncMsRef.current,
     })
     if (bleedCancelActive && targetBar) {
-      const cleaned = audioEngine.cancelSpeakerBleed(buffer, targetBar.startSec, vocalSyncMsRef.current)
+      const cleaned = audioEngine.cancelSpeakerBleed(buffer, targetBar.startSec, vocalSyncMsRef.current, bleedCancelPresetRef.current)
       if (cleaned) { takeBuffer = cleaned; bleedCancelled = true }
       else console.warn('[BLEED] cancellation skipped — no backing track loaded or sample rate mismatch')
     }
@@ -1147,6 +1363,33 @@ export default function App() {
     }
   }
 
+  // Recorded takes are the only thing a fresh session cannot rebuild, so they are what
+  // "unsaved work" means here — the beat and grid come back from the .fist or the file.
+  const hasUnsavedWork = project.takes.length > 0
+
+  useEffect(() => {
+    if (!hasUnsavedWork) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [hasUnsavedWork])
+
+  // Routes any action that would replace the current session through the confirm modal.
+  const guardOverwrite = (run: () => void) => {
+    if (!hasUnsavedWork) { run(); return }
+    setPendingOverwrite({ run })
+  }
+
+  const handleOverwriteExportFirst = async () => {
+    const pending = pendingOverwrite
+    setPendingOverwrite(null)
+    await handleExportProject()
+    pending?.run()
+  }
+
   const handleImportProject = async (file: File) => {
     try {
       setStatus(`Opening ${file.name}\u2026`)
@@ -1262,7 +1505,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="sticky-transport-header">
+          <div className="sticky-transport-header" ref={stickyHeaderRef}>
         <div className={`section-collapsible ${showWaveform ? '' : 'is-collapsed'}`}>
         <div className="section-body">
         {showWaveform ? (
@@ -1358,6 +1601,15 @@ export default function App() {
         <div className="section-body">
         <div className="collapsible-header">
           <span className="collapsible-title">Volume</span>
+          <button
+            className="section-help-button"
+            type="button"
+            aria-label="What do the Volume controls do?"
+            title="What do the Volume controls do?"
+            onClick={(event) => { event.stopPropagation(); setHelpTopic('volume') }}
+          >
+            ?
+          </button>
         </div>
         {showVolume && (
         <Mixer
@@ -1412,6 +1664,15 @@ export default function App() {
             <div className="section-body">
             <div className="collapsible-header">
               <span className="collapsible-title">Import / Export</span>
+              <button
+                className="section-help-button"
+                type="button"
+                aria-label="What do the Import / Export controls do?"
+                title="What do the Import / Export controls do?"
+                onClick={(event) => { event.stopPropagation(); setHelpTopic('project') }}
+              >
+                ?
+              </button>
             </div>
             {showProject && (
               <div className="project-export-grid">
@@ -1431,7 +1692,7 @@ export default function App() {
                         onChange={(event) => {
                           const presetId = event.target.value
                           setSelectedPresetId(presetId)
-                          if (presetId) void handleLoadPreset(presetId)
+                          if (presetId) guardOverwrite(() => { void handleLoadPreset(presetId) })
                         }}
                       >
                         <option value="">
@@ -1456,7 +1717,7 @@ export default function App() {
                   <div className="project-quadrant-controls">
                     <label className="io-button" title="Choose an audio file from your computer">
                       Choose File
-                      <input type="file" accept={AUDIO_ACCEPT} onChange={(e) => handleFile(e.target.files?.[0])} />
+                      <input type="file" accept={AUDIO_ACCEPT} onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guardOverwrite(() => { void handleFile(file) }) }} />
                     </label>
                     <input
                       type="text"
@@ -1507,7 +1768,7 @@ export default function App() {
                           onChange={(event) => {
                             const file = event.target.files?.[0]
                             event.target.value = ''
-                            if (file) void handleImportProject(file)
+                            if (file) guardOverwrite(() => { void handleImportProject(file) })
                           }}
                         />
                       </label>
@@ -1538,7 +1799,7 @@ export default function App() {
               className={`section-tab ${showProject ? 'section-tab-open' : 'section-tab-collapsed'}`}
               aria-expanded={showProject}
               title={showProject ? 'Hide Import / Export' : 'Show Import / Export'}
-              {...sectionToggleHandlers(setShowProject)}
+              {...sectionActionHandlers(() => toggleAccordionPanel('project'))}
             >
               {showProject ? 'Hide' : 'Show'}
             </button>
@@ -1558,41 +1819,58 @@ export default function App() {
 
           <section className={`setup-stack section-collapsible ${showSetup ? '' : 'setup-stack-collapsed is-collapsed'}`}>
           <div className="section-body">
-          {!showSetup && (
-            <div className="collapsible-header">
-              <span className="collapsible-title">Beat Setup</span>
-            </div>
-          )}
+          {/* Outside the showSetup branch so the title and its help stay reachable while collapsed. */}
+          <div className="collapsible-header">
+            <span className="collapsible-title">Beat Setup</span>
+            <button
+              className="section-help-button"
+              type="button"
+              aria-label="What do the Beat Setup controls do?"
+              title="What do the Beat Setup controls do?"
+              onClick={(event) => { event.stopPropagation(); setHelpTopic('setup') }}
+            >
+              ?
+            </button>
+          </div>
           {showSetup && <>
           <section className="panel beat-setup-panel">
-            <div className="collapsible-header">
-              <span className="collapsible-title">Beat Setup</span>
-              <button
-                className="bwe-help collapsible-corner"
-                type="button"
-                aria-label="Explain Import Beat controls"
-                title="Explain Import Beat controls"
-                onClick={() => setShowImportHelp((visible) => !visible)}
-              >
-                ?
-              </button>
-            </div>
-            {showImportHelp && (
-              <div className="bwe-help-text">
-                <strong>File:</strong> upload an audio file (MP3, WAV, M4A) under 10 minutes long.<br />
-                <strong>BPM:</strong> is available in the top transport bar. Create Bars estimates it automatically, or you can set an exact value there.<br />
-                <strong>Offset:</strong> sets where Bar 1 begins, in seconds from the start of the file.<br />
-                <strong>Set Bar 1 here:</strong> sets the offset to the current play position instead of typing a number.
-              </div>
-            )}
             <div className="controls">
-              <div className="transport-bpm" onClick={(event) => event.stopPropagation()}>
+              <div className="beat-setup-actions">
+                <button
+                  className="beat-setup-set-bar1"
+                  title="Set Bar 1 to the current audio position and rebuild the grid"
+                  disabled={!audioLoaded || detectBusy}
+                  onClick={() => {
+                    const position = isPlaying ? cursor : playhead
+                    setBar1Anchor(position)
+                    setStatus(`Bar 1 set to ${position.toFixed(3)}s.`)
+                  }}
+                >
+                  Set Bar 1
+                </button>
+                <button
+                  className="beat-setup-auto-bpm"
+                  title="Detect the tempo without moving the Bar 1 anchor"
+                  disabled={!audioLoaded || detectBusy}
+                  onClick={() => { void handleAutoBpm() }}
+                >
+                  {detectBusy ? 'Detecting\u2026' : 'Auto BPM'}
+                </button>
+              </div>
+
+              <div className="beat-setup-group beat-setup-tempo-group">
+                <span className="beat-setup-group-label">Tempo</span>
+                <div className="transport-bpm" onClick={(event) => event.stopPropagation()}>
                 <span>BPM</span>
                 <input
                   type="number"
                   value={bpmInput}
                   onChange={(event) => handleBpmInput(event.target.value)}
                   onBlur={commitBpmInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') { event.preventDefault(); commitBpmInput() }
+                    if (event.key === 'Escape') setBpmInput(project.beat.bpm ? String(project.beat.bpm) : '')
+                  }}
                   min={1}
                   max={999}
                   step={0.1}
@@ -1639,39 +1917,40 @@ export default function App() {
                   aria-label="Metronome volume"
                   title="Metronome volume"
                 />
+                </div>
               </div>
-              <button
-                type="button"
-                className={`beat-setup-bleed-cancel ${bleedCancelEnabled ? 'loop-toggle-on' : 'secondary'}`}
-                aria-pressed={bleedCancelEnabled}
-                onClick={() => setBleedCancelEnabled((enabled) => !enabled)}
-                title={bleedCancelEnabled
-                  ? 'Bleed Cancellation on — new takes subtract speaker leakage'
-                  : 'Bleed Cancellation off — record the raw mic signal'}
-              >
-                Bleed Cancel
-              </button>
-              <div className="beat-setup-actions">
+
+              <div className="beat-setup-group beat-setup-dsp-group">
+                <span className="beat-setup-group-label">Bleed</span>
                 <button
-                  className="beat-setup-auto-bpm"
-                  title="Detect the tempo without moving the Bar 1 anchor"
-                  disabled={!audioLoaded || detectBusy}
-                  onClick={() => { void handleAutoBpm() }}
+                  type="button"
+                  className={`beat-setup-bleed-cancel ${bleedCancelEnabled ? 'loop-toggle-on' : 'secondary'}`}
+                  aria-pressed={bleedCancelEnabled}
+                  onClick={() => setBleedCancelEnabled((enabled) => !enabled)}
+                  title={bleedCancelEnabled
+                    ? 'Bleed Cancellation on — new takes subtract speaker leakage'
+                    : 'Bleed Cancellation off — record the raw mic signal'}
                 >
-                  {detectBusy ? 'Detecting\u2026' : 'Auto BPM'}
+                  Bleed Cancel
                 </button>
-                <button
-                  className="beat-setup-set-bar1"
-                  title="Set Bar 1 to the current audio position and rebuild the grid"
-                  disabled={!audioLoaded || detectBusy}
-                  onClick={() => {
-                    const position = isPlaying ? cursor : playhead
-                    setBar1Anchor(position)
-                    setStatus(`Bar 1 set to ${position.toFixed(3)}s.`)
-                  }}
-                >
-                  Set Bar 1
-                </button>
+                <div className="bleed-preset-group" role="group" aria-label="Bleed cancellation strength">
+                {([
+                  { id: 'light', label: 'Light', hint: 'Gentlest — preserves vocal tails, least pumping' },
+                  { id: 'standard', label: 'Standard', hint: 'Balanced drum and bass bleed reduction' },
+                  { id: 'heavy', label: 'Heavy', hint: 'Maximum isolation for sparse, drum-heavy beats' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`bleed-preset-button ${bleedCancelPreset === option.id ? 'bleed-preset-active' : 'secondary'}`}
+                    aria-pressed={bleedCancelPreset === option.id}
+                    title={option.hint}
+                    onClick={() => setBleedCancelPreset(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+                </div>
               </div>
             </div>
           <div className="beat-setup-anchor">
@@ -1711,6 +1990,14 @@ export default function App() {
           </div>
           <div className="beat-setup-sync">
               <div className="controls playback-sync-controls">
+                <button
+                  className="calibrate-mic-button"
+                  onClick={handleCalibrateMicTiming}
+                  disabled={isCalibratingMic || !audioLoaded}
+                  title="Plays a short test pulse through speakers and listens for it on the mic to auto-set vocal sync"
+                >
+                  {isCalibratingMic ? 'Calibrating\u2026' : 'Calibrate Mic Timing'}
+                </button>
                 <label className="flex-gap">
                   Shift vocals
                   <input
@@ -1745,16 +2032,9 @@ export default function App() {
                   <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 100)} title="Shift vocals 100 milliseconds later"><span>100 MS</span><span className="sync-arrow sync-arrow-right sync-arrow-3" aria-hidden="true"><i /><i /><i /></span></button>
                   <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 10)} title="Shift vocals 10 milliseconds later"><span>10 MS</span><span className="sync-arrow sync-arrow-right sync-arrow-2" aria-hidden="true"><i /><i /></span></button>
                   <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1)} title="Shift vocals 1 millisecond later"><span>1 MS</span><span className="sync-arrow sync-arrow-right sync-arrow-1" aria-hidden="true"><i /></span></button>
+                  <span className="playback-sync-divider" aria-hidden="true">|</span>
+                  <button className="secondary playback-sync-reset" onClick={() => updateGlobalSync(0)}>Reset</button>
                 </div>
-                <button className="secondary playback-sync-reset" onClick={() => updateGlobalSync(0)}>Reset</button>
-                <button
-                  className="secondary calibrate-mic-button"
-                  onClick={handleCalibrateMicTiming}
-                  disabled={isCalibratingMic || !audioLoaded}
-                  title="Plays a short test pulse through speakers and listens for it on the mic to auto-set vocal sync"
-                >
-                  {isCalibratingMic ? 'Calibrating\u2026' : 'Calibrate Mic Timing'}
-                </button>
               </div>
           </div>
           </section>
@@ -1765,12 +2045,23 @@ export default function App() {
             className={`section-tab ${showSetup ? 'section-tab-open' : 'section-tab-collapsed'}`}
             aria-expanded={showSetup}
             title={showSetup ? 'Hide Beat Setup' : 'Show Beat Setup'}
-            {...sectionToggleHandlers(setShowSetup)}
+            {...sectionActionHandlers(() => toggleAccordionPanel('setup'))}
           >
             {showSetup ? 'Hide' : 'Show'}
           </button>
           </section>
 
+          {/* The tab is mobile-only via CSS; on desktop this wrapper is inert. */}
+          <div className={`bars-accordion ${showBars ? '' : 'bars-accordion-collapsed'}`}>
+          <button
+            type="button"
+            className="bars-accordion-tab"
+            aria-expanded={showBars}
+            title={showBars ? 'Hide Bars' : 'Show Bars'}
+            {...sectionActionHandlers(() => toggleAccordionPanel('bars'))}
+          >
+            Bars {showBars ? '\u2303' : '\u2304'}
+          </button>
           <BarList
             bars={project.bars}
             audioBuffer={audioEngine.beatAudioBuffer}
@@ -1815,10 +2106,19 @@ export default function App() {
             onSetLoopIn={handleLoopStartChange}
             onSetLoopOut={handleLoopEndChange}
             onDeleteAllTakes={handleDeleteAllTakes}
+            clipboardTake={clipboardTake}
+            onCopyTake={handleTakeCopy}
+            onCutTake={handleTakeCut}
+            onPasteTake={(barIndex) => { void handleTakePaste(barIndex) }}
+            onClearClipboard={handleClearClipboard}
+            onMoveTakeToBar={handleTakeDropOnBar}
             focusMode={!upperSectionsOpen}
+            onShowHelp={() => setHelpTopic('bars')}
             onToggleFocus={() => {
-              captureFocusScrollAnchor()
               const next = !upperSectionsOpen
+              // next === false means the sections collapse, i.e. BARS ONLY turns on.
+              if (!next) pendingFocusBarRef.current = loopEnabled && loopRange ? loopRange.start : 0
+              else captureFocusScrollAnchor()
               setShowVolume(next)
               setShowSetup(next)
               setShowProject(next)
@@ -1826,6 +2126,7 @@ export default function App() {
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
           />
+          </div>
         </div>
       </div>
 
@@ -1853,6 +2154,76 @@ export default function App() {
               ? <span className="calibration-countdown" aria-hidden="true">{calibrationCountdown}</span>
               : <span className="button-spinner" aria-hidden="true" />}
             <p>Calibrating Mic Latency... Stand by for test clicks. Please keep your room quiet.</p>
+          </div>
+        </div>
+      )}
+
+      {pendingOverwrite && (
+        <div className="calibration-modal-overlay" role="presentation">
+          <div className="overwrite-modal" role="alertdialog" aria-modal="true">
+            <p className="overwrite-modal-message">
+              Hey, do you want to export your current work so you don&rsquo;t lose it, or are we good to proceed?
+            </p>
+            <div className="overwrite-modal-actions">
+              <button
+                type="button"
+                className="overwrite-modal-export"
+                disabled={isExportingProject}
+                onClick={() => { void handleOverwriteExportFirst() }}
+              >
+                {isExportingProject && <span className="button-spinner" aria-hidden="true" />}
+                Export First
+              </button>
+              <button
+                type="button"
+                className="overwrite-modal-proceed"
+                onClick={() => { const pending = pendingOverwrite; setPendingOverwrite(null); pending?.run() }}
+              >
+                Proceed Anyway
+              </button>
+              <button
+                type="button"
+                className="overwrite-modal-cancel"
+                onClick={() => setPendingOverwrite(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {helpTopic && (
+        <div
+          className="help-modal-overlay"
+          role="presentation"
+          onClick={() => setHelpTopic(null)}
+        >
+          <div
+            className="help-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${HELP_CONTENT[helpTopic].title} help`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="help-modal-header">
+              <span className="help-modal-title">{HELP_CONTENT[helpTopic].title}</span>
+              <button
+                type="button"
+                className="help-modal-close"
+                aria-label="Close help"
+                onClick={() => setHelpTopic(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <dl className="help-modal-body">
+              {HELP_CONTENT[helpTopic].entries.map((entry) => (
+                <div key={entry.term} className="help-modal-entry">
+                  <dt>{entry.term}</dt>
+                  <dd>{entry.text}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
         </div>
       )}

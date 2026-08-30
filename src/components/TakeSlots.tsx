@@ -11,9 +11,11 @@ interface Props {
   onAudition: (takeId: string) => void
   onSelectNone: () => void
   onDelete: (takeId: string) => void
+  onDragTakeStart: (takeId: string) => void
+  onDragTakeEnd: () => void
 }
 
-export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, onArm, onDisarm, onSelect, onAudition, onSelectNone, onDelete }: Props) {
+export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, onArm, onDisarm, onSelect, onAudition, onSelectNone, onDelete, onDragTakeStart, onDragTakeEnd }: Props) {
   return (
     <div className="take-slots" aria-label="Bar takes">
       {Array.from({ length: 5 }, (_, slot) => {
@@ -23,9 +25,9 @@ export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, 
         const label = armed
           ? `Disarm Take ${slot + 1}`
           : take?.selected
-            ? `Audition Take ${slot + 1} on its own (right-click to delete)`
+            ? `Audition Take ${slot + 1} on its own (right-click to delete, drag to move)`
             : take
-              ? `Use Take ${slot + 1} for playback (right-click to delete)`
+              ? `Use Take ${slot + 1} for playback (right-click to delete, drag to move)`
               : `Arm Take ${slot + 1}`
         return (
           <button
@@ -34,6 +36,15 @@ export function TakeSlots({ takes, armedSlots, noTakeActive, auditioningTakeId, 
             className={`take-pad ${take ? 'take-recorded' : 'take-empty'} ${take?.selected ? 'take-selected' : ''} ${auditioning ? 'take-auditioning' : ''} ${armed ? 'take-armed' : ''} ${take?.locked ? 'take-locked' : ''}`}
             aria-label={label}
             title={label}
+            draggable={Boolean(take) && !armed}
+            onDragStart={(event) => {
+              if (!take || armed) return
+              event.stopPropagation()
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', take.takeId)
+              onDragTakeStart(take.takeId)
+            }}
+            onDragEnd={onDragTakeEnd}
             onClick={(event) => {
               event.stopPropagation()
               if (armed) onDisarm(slot)

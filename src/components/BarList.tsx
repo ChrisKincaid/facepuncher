@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Bar, Take } from '../data/models'
 import { BarWaveformBackdrop } from './BarWaveformBackdrop'
 import { TakeSlots } from './TakeSlots'
@@ -26,8 +26,15 @@ interface Props {
   onSetLoopIn: (barIndex: number) => void
   onSetLoopOut: (barIndex: number) => void
   onDeleteAllTakes: () => void
+  clipboardTake: { sourceTakeId: string; sourceBarIndex: number; action: 'copy' | 'cut' } | null
+  onCopyTake: (takeId: string) => void
+  onCutTake: (takeId: string) => void
+  onPasteTake: (barIndex: number) => void
+  onClearClipboard: () => void
+  onMoveTakeToBar: (takeId: string, barIndex: number) => void
   focusMode: boolean
   onToggleFocus: () => void
+  onShowHelp: () => void
   onFocusBar: (barIndex: number) => void
   onTakeGain: (takeId: string, value: number) => void
 }
@@ -52,12 +59,38 @@ export function BarList({
   onSetLoopIn,
   onSetLoopOut,
   onDeleteAllTakes,
+  clipboardTake,
+  onCopyTake,
+  onCutTake,
+  onPasteTake,
+  onClearClipboard,
+  onMoveTakeToBar,
   focusMode,
   onToggleFocus,
+  onShowHelp,
   onFocusBar,
   onTakeGain,
 }: Props) {
   const [barScale, setBarScale] = useState<BarScale>(2)
+  const [openActionBar, setOpenActionBar] = useState<number | null>(null)
+  const [draggingTakeId, setDraggingTakeId] = useState<string | null>(null)
+  const [dropTargetBar, setDropTargetBar] = useState<number | null>(null)
+  const [justPasted, setJustPasted] = useState(false)
+  const pastedTimer = useRef<number | null>(null)
+
+  useEffect(() => () => { if (pastedTimer.current) window.clearTimeout(pastedTimer.current) }, [])
+
+  // A copy stays on the clipboard for repeat pastes, so the banner is the only place
+  // that can confirm the paste landed.
+  const handlePasteOnBar = (barIndex: number) => {
+    onPasteTake(barIndex)
+    setJustPasted(true)
+    if (pastedTimer.current) window.clearTimeout(pastedTimer.current)
+    pastedTimer.current = window.setTimeout(() => {
+      pastedTimer.current = null
+      setJustPasted(false)
+    }, 1600)
+  }
   return (
     <div className="panel bar-list-panel">
       <div className="collapsible-header" style={{ marginBottom: 6 }}>
@@ -106,7 +139,29 @@ export function BarList({
           </button>
         </div>
         <span className="collapsible-title">Bars</span>
+        <button
+          className="section-help-button"
+          type="button"
+          aria-label="How do bars and takes work?"
+          title="How do bars and takes work?"
+          onClick={(event) => { event.stopPropagation(); onShowHelp() }}
+        >
+          ?
+        </button>
       </div>
+
+      {clipboardTake && (
+        <div className={`clipboard-banner ${justPasted ? 'clipboard-banner-done' : ''}`} role="status">
+          <span>
+            {justPasted
+              ? 'Pasted!'
+              : `${clipboardTake.action === 'cut' ? 'Cut' : 'Copied'} take from Bar ${clipboardTake.sourceBarIndex + 1} — tap PASTE on a bar`}
+          </span>
+          <button type="button" className="clipboard-banner-cancel" onClick={onClearClipboard}>
+            Done
+          </button>
+        </div>
+      )}
 
       <div className={`bar-list bar-scale-${barScale}x`}>
         {bars.map((bar) => {
@@ -116,17 +171,50 @@ export function BarList({
           const selectedTake = barTakes.find((t) => t.selected)
           const isLoopIn = loopRange?.start === bar.index
           const isLoopOut = loopRange?.end === bar.index
+          const barFull = barTakes.length >= 5
+          // Copy/Cut act on the active take, but fall back to the bar's first take —
+          // clicking the "no take" pad clears the selection, and that must not make a
+          // bar holding audio uncopyable (which left the clipboard empty and Paste grey).
+          const transferTake = selectedTake ?? barTakes[0]
+          const armedHere = (armedTakeByBar[bar.index] ?? []).length > 0
+          const canPasteHere = Boolean(clipboardTake) && !barFull
+          const isDropTarget = dropTargetBar === bar.index
+          const headerState = armedHere
+            ? 'bar-num-armed'
+            : isDropTarget
+              ? 'bar-num-drop-target'
+              : canPasteHere
+                ? 'bar-num-paste-ready'
+                : barTakes.length
+                  ? 'bar-num-has-takes'
+                  : 'bar-num-empty'
           return (
             <div
               key={bar.index}
               id={`bar-row-${bar.index}`}
-              className={`bar-row ${active ? 'bar-active' : ''} ${inLoop ? 'bar-loop' : ''}`}
+              className={`bar-row ${active ? 'bar-active' : ''} ${inLoop ? 'bar-loop' : ''} ${isDropTarget ? 'bar-drop-target' : ''} ${draggingTakeId && barFull ? 'bar-drop-blocked' : ''} ${openActionBar === bar.index ? 'bar-menu-open' : ''}`}
               onClick={() => onFocusBar(bar.index)}
+              onDragOver={(event) => {
+                if (!draggingTakeId) return
+                // Only a droppable bar may preventDefault — leaving the default in place
+                // is what makes a full bar reject the drop instead of silently accepting.
+                if (barFull) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                if (dropTargetBar !== bar.index) setDropTargetBar(bar.index)
+              }}
+              onDragLeave={() => { if (dropTargetBar === bar.index) setDropTargetBar(null) }}
+              onDrop={(event) => {
+                event.preventDefault()
+                setDropTargetBar(null)
+                const takeId = event.dataTransfer.getData('text/plain') || draggingTakeId
+                if (takeId) onMoveTakeToBar(takeId, bar.index)
+              }}
             >
               <div className="bar-main-row">
               <div className="bar-controls-left">
               <div className="bar-meta">
-                <div className="bar-num">Bar {bar.index + 1}</div>
+                <div className={`bar-num ${headerState}`}>Bar {bar.index + 1}</div>
                 <div
                   className={`bar-status-strip ${active ? 'bar-status-playing' : ''} ${isRecording && active && bar.index === currentBarIndex ? 'bar-status-recording' : ''}`}
                   aria-label={isRecording && active && bar.index === currentBarIndex ? 'Recording' : active ? 'Playing' : 'Bar inactive'}
@@ -144,9 +232,98 @@ export function BarList({
                   onAudition={onAuditionTake}
                   onSelectNone={() => onSelectNoTake(bar.index)}
                   onDelete={onDeleteTake}
+                  onDragTakeStart={setDraggingTakeId}
+                  onDragTakeEnd={() => { setDraggingTakeId(null); setDropTargetBar(null) }}
                 />
               </div>
               <div className="bar-take-actions" onClick={(e) => e.stopPropagation()}>
+                <div className="bar-transfer-wrap">
+                  <button
+                    type="button"
+                    className={`secondary bar-transfer-button ${openActionBar === bar.index ? 'bar-transfer-open' : ''} ${canPasteHere ? 'bar-transfer-loaded' : ''}`}
+                    aria-haspopup="menu"
+                    aria-expanded={openActionBar === bar.index}
+                    title={canPasteHere
+                      ? `Clipboard ready \u2014 paste into Bar ${bar.index + 1}`
+                      : 'Copy, cut or paste a take'}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      event.preventDefault()
+                      setOpenActionBar((open) => (open === bar.index ? null : bar.index))
+                    }}
+                  >
+                    {'\u21c4'}
+                  </button>
+                  {openActionBar === bar.index && (
+                    <div
+                      className="bar-transfer-menu"
+                      role="menu"
+                      onClick={(event) => { event.stopPropagation(); event.preventDefault() }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="bar-transfer-action"
+                        disabled={!transferTake}
+                        title={transferTake ? `Copy Take from Bar ${bar.index + 1}` : 'This bar has no takes to copy'}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          event.preventDefault()
+                          if (transferTake) onCopyTake(transferTake.takeId)
+                          setOpenActionBar(null)
+                        }}
+                      >
+                        Copy
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="bar-transfer-action"
+                        disabled={!transferTake}
+                        title={transferTake ? `Cut Take from Bar ${bar.index + 1}` : 'This bar has no takes to cut'}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          event.preventDefault()
+                          if (transferTake) onCutTake(transferTake.takeId)
+                          setOpenActionBar(null)
+                        }}
+                      >
+                        Cut
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="bar-transfer-action bar-transfer-delete"
+                        disabled={!transferTake}
+                        title={transferTake ? `Delete Take from Bar ${bar.index + 1}` : 'This bar has no takes to delete'}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          event.preventDefault()
+                          if (transferTake) onDeleteTake(transferTake.takeId)
+                          setOpenActionBar(null)
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {clipboardTake && (
+                  <button
+                    type="button"
+                    className={`bar-paste-button ${barFull ? 'bar-paste-blocked' : ''}`}
+                    disabled={barFull}
+                    title={barFull ? 'Bar Full \u2014 Max 5 Takes' : `Paste the ${clipboardTake.action === 'cut' ? 'cut' : 'copied'} take into Bar ${bar.index + 1}`}
+                    onClick={() => handlePasteOnBar(bar.index)}
+                  >
+                    PASTE
+                  </button>
+                )}
                 <button
                   type="button"
                   className={`secondary bar-fav-button ${selectedTake?.locked ? 'bar-fav-on' : ''}`}

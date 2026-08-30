@@ -15,6 +15,13 @@
   --waveform-height: clamp(45px, 12vh, 65px);
 }
 
+html {
+  scroll-behavior: smooth;
+  /* Proximity, not mandatory: mandatory would fight the user whenever they try to rest
+     the view on the panels above the bar list. */
+  scroll-snap-type: y proximity;
+}
+
 body {
   margin: 0;
   font-family: var(--font);
@@ -174,19 +181,96 @@ body {
   white-space: nowrap;
 }
 
-/* Pinned to the far right of the Beat Setup row, Set Bar 1 outermost. */
+.bleed-preset-group {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bleed-preset-button {
+  min-width: 34px;
+  min-height: 16px;
+  padding: 2px 5px;
+  font-size: 5.5px;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 0;
+}
+
+.bleed-preset-button + .bleed-preset-button {
+  border-left: 1px solid var(--border);
+}
+
+.bleed-preset-active {
+  background: var(--accent-2);
+  color: #17110a;
+}
+
+/* Leads the Beat Setup row: Set Bar 1, then Auto BPM. */
 .beat-setup-actions {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
   flex: 0 0 auto;
 }
 
-.beat-setup-auto-bpm,
-.beat-setup-set-bar1 {
+/* Bordered clusters so Tempo and Bleed read as separate control groups. */
+.beat-setup-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.beat-setup-group-label {
+  font-size: 5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.beat-setup-auto-bpm {
   flex: 0 0 auto;
   min-width: 74px;
+}
+
+.beat-setup-set-bar1 {
+  flex: 0 0 auto;
+  min-width: 82px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: var(--accent);
+  background: rgba(77, 208, 225, 0.12);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 6px rgba(77, 208, 225, 0.35);
+  transition: box-shadow 120ms ease, background-color 120ms ease, transform 60ms ease;
+}
+
+.beat-setup-set-bar1:hover:not(:disabled) {
+  background: rgba(77, 208, 225, 0.22);
+  box-shadow: 0 0 10px rgba(77, 208, 225, 0.6);
+}
+
+.beat-setup-set-bar1:active:not(:disabled) {
+  transform: translateY(1px) scale(0.97);
+  background: var(--accent);
+  color: #041014;
+  box-shadow: 0 0 14px rgba(77, 208, 225, 0.85);
+}
+
+.beat-setup-set-bar1:disabled {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+  box-shadow: none;
 }
 
 .playback-wide-button {
@@ -271,8 +355,34 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
   min-height: 13px;
   margin-bottom: 5px;
+}
+
+/* Sits inline next to the section title rather than pinned to the corner, so the
+   question mark reads as belonging to that heading. */
+.section-help-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.section-help-button:hover,
+.section-help-button:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .collapsible-title {
@@ -948,10 +1058,14 @@ body {
   align-items: center;
 }
 
+/* Reset and Calibrate now live inside .playback-sync-buttons, so this is a three-part
+   row: shift slider, exact ms, then the whole nudge/action cluster. */
 .playback-sync-controls {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 .playback-sync-controls > .flex-gap {
@@ -963,6 +1077,8 @@ body {
   min-width: 0;
   display: flex;
   align-items: stretch;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 3px;
   white-space: nowrap;
 }
@@ -1029,19 +1145,40 @@ body {
   white-space: nowrap;
 }
 
-@media (max-width: 700px) {
-  .playback-sync-controls {
-    grid-template-columns: auto auto;
-  }
+/* Leads the sync row, ahead of Shift Vocals. No .secondary class on the element —
+   that rule's element+class specificity would otherwise beat this accent styling. */
+.calibrate-mic-button {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 14px;
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  color: var(--accent);
+  background: rgba(77, 208, 225, 0.1);
+  border: 1px solid rgba(77, 208, 225, 0.6);
+  border-radius: 4px;
+  transition: background-color 120ms ease, box-shadow 120ms ease, transform 60ms ease;
+}
 
-  .playback-sync-buttons,
-  .playback-sync-reset {
-    grid-column: 1 / -1;
-  }
+.calibrate-mic-button:hover:not(:disabled) {
+  background: rgba(77, 208, 225, 0.2);
+  box-shadow: 0 0 8px rgba(77, 208, 225, 0.45);
+}
 
-  .playback-sync-reset {
-    justify-self: start;
-  }
+.calibrate-mic-button:active:not(:disabled) {
+  transform: translateY(1px);
+  color: #041014;
+  background: var(--accent);
+}
+
+.calibrate-mic-button:disabled {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+  box-shadow: none;
+  cursor: not-allowed;
 }
 
 button,
@@ -1245,6 +1382,9 @@ input[type='file'] {
   border-radius: 2.5px;
   background: rgba(255, 255, 255, 0.02);
   cursor: pointer;
+  scroll-snap-align: start;
+  /* Keeps a snapped row clear of the sticky header rather than under it. */
+  scroll-margin-top: var(--sticky-header-height, 0px);
 }
 
 .bar-main-row {
@@ -1442,6 +1582,192 @@ input[type='file'] {
   font-size: calc(6px * var(--bar-ctrl-scale, 1));
   font-weight: 700;
   white-space: nowrap;
+  padding: 1px 3px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.bar-num-empty {
+  color: var(--muted);
+}
+
+.bar-num-has-takes {
+  color: var(--accent-2);
+  border-color: rgba(246, 193, 119, 0.4);
+  background: rgba(246, 193, 119, 0.1);
+}
+
+.bar-num-armed {
+  color: #fff;
+  border-color: #e3404b;
+  background: rgba(227, 64, 75, 0.25);
+}
+
+.bar-num-paste-ready {
+  color: var(--accent);
+  border-color: rgba(77, 208, 225, 0.45);
+  border-style: dashed;
+}
+
+.bar-num-drop-target {
+  color: #041014;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.bar-drop-target {
+  box-shadow: 0 0 0 1px var(--accent), inset 0 0 12px rgba(77, 208, 225, 0.2);
+}
+
+.bar-drop-blocked {
+  opacity: 0.55;
+}
+
+.bar-transfer-wrap {
+  position: relative;
+  display: flex;
+}
+
+/* Each .bar-main-row opens its own stacking context at z-index 1, so a later bar row
+   would paint over an earlier row's popover no matter how high the popover's z-index
+   is. Lifting the whole row while its menu is open is what actually keeps it on top. */
+.bar-menu-open {
+  z-index: 500;
+}
+
+.bar-transfer-button {
+  min-width: calc(14px * var(--bar-ctrl-scale, 1));
+  min-height: calc(14px * var(--bar-ctrl-scale, 1));
+  padding: calc(2px * var(--bar-ctrl-scale, 1));
+  font-size: calc(7px * var(--bar-ctrl-scale, 1));
+  line-height: 1;
+}
+
+.bar-transfer-open {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.bar-transfer-loaded {
+  border-color: rgba(246, 193, 119, 0.7) !important;
+  color: var(--accent-2) !important;
+}
+
+.bar-transfer-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  min-width: 92px;
+  margin-top: 2px;
+  padding: 3px;
+  gap: 3px;
+  opacity: 1;
+  background-color: #1a1d24;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.85);
+}
+
+/* Deliberately larger than the surrounding 6px UI — these are tap targets. */
+.bar-transfer-action {
+  width: 100%;
+  min-height: 22px;
+  padding: 5px 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-align: center;
+  color: var(--text);
+  background: rgba(148, 156, 166, 0.12);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.bar-transfer-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(77, 208, 225, 0.18);
+}
+
+.bar-transfer-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.bar-transfer-delete {
+  color: var(--danger);
+}
+
+.bar-transfer-delete:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: rgba(255, 107, 107, 0.18);
+}
+
+.bar-paste-button {
+  min-width: calc(30px * var(--bar-ctrl-scale, 1));
+  min-height: calc(14px * var(--bar-ctrl-scale, 1));
+  padding: calc(2px * var(--bar-ctrl-scale, 1)) calc(5px * var(--bar-ctrl-scale, 1));
+  font-size: calc(5.5px * var(--bar-ctrl-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #041014;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  animation: paste-pulse 1.4s ease-in-out infinite;
+}
+
+.bar-paste-blocked {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+  animation: none;
+  opacity: 0.4;
+}
+
+@keyframes paste-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(77, 208, 225, 0.6); }
+  50% { box-shadow: 0 0 6px 2px rgba(77, 208, 225, 0.55); }
+}
+
+.clipboard-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 5px;
+  padding: 6px 10px;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--accent);
+  background: #1a232a;
+  border: 1px solid rgba(77, 208, 225, 0.45);
+  border-radius: 4px;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+
+.clipboard-banner-done {
+  color: var(--accent-2);
+  border-color: rgba(246, 193, 119, 0.55);
+}
+
+.clipboard-banner-cancel {
+  min-height: 16px;
+  padding: 3px 8px;
+  font-size: 7px;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.clipboard-banner-cancel:hover {
+  border-color: var(--accent);
+  background: rgba(77, 208, 225, 0.16);
 }
 
 .bar-status-strip {
@@ -1554,18 +1880,29 @@ input[type='file'] {
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7);
 }
 
-.calibrate-mic-button {
-  margin-left: auto;
-}
-
+/* Must outrank the sticky transport header (z-index 999), otherwise it paints over
+   any modal opened from the panels below it. */
 .calibration-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 400;
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
   background: rgba(0, 0, 0, 0.55);
+}
+
+.help-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.6);
 }
 
 .calibration-modal {
@@ -1588,6 +1925,142 @@ input[type='file'] {
 .calibration-modal .button-spinner {
   width: 10px;
   height: 10px;
+}
+
+.overwrite-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: min(360px, 90vw);
+  padding: 18px 20px;
+  background: #1b1d29;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
+}
+
+.help-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(420px, 92vw);
+  max-height: 80vh;
+  padding: 14px 16px;
+  background: #1b1d29;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
+}
+
+.help-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-modal-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.help-modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.help-modal-close:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.help-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+  margin: 0;
+  overflow-y: auto;
+}
+
+.help-modal-entry dt {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-2);
+}
+
+.help-modal-entry dd {
+  margin: 2px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.overwrite-modal-message {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text);
+}
+
+.overwrite-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.overwrite-modal-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 7px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.overwrite-modal-export {
+  color: #041014;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.overwrite-modal-proceed {
+  color: var(--accent-2);
+  background: transparent;
+  border-color: rgba(246, 193, 119, 0.5);
+}
+
+.overwrite-modal-cancel {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.overwrite-modal-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .calibration-countdown {
@@ -1743,6 +2216,11 @@ input[type='file'] {
   }
 }
 
+/* The Bars accordion tab only exists for the mobile layout. */
+.bars-accordion-tab {
+  display: none;
+}
+
 /* Touch screens get the tallest rows regardless of the manual zoom step. */
 @media (max-width: 768px) {
   .bar-list,
@@ -1750,10 +2228,115 @@ input[type='file'] {
   .bar-list.bar-scale-2x,
   .bar-list.bar-scale-4x {
     --bar-row-height: 60px;
+    /* Bumped so every control in a bar row is a usable thumb target. */
+    --bar-ctrl-scale: 2;
   }
 
   .bar-scale-controls {
     display: none;
+  }
+
+  /* ── accordion ── */
+  .bars-accordion-tab {
+    display: block;
+    width: 100%;
+    margin-bottom: 4px;
+    padding: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .bars-accordion-collapsed .bar-list-panel {
+    display: none;
+  }
+
+  /* ── portrait fitting ── */
+  body,
+  .shell {
+    overflow-x: hidden;
+  }
+
+  .top-nav,
+  .nav-waveform-stage,
+  .beat-setup-anchor,
+  .bar1-anchor-canvas {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  /* ── wrapped, centred control groups ── */
+  .controls,
+  .transport-bpm,
+  .playback-sync-controls,
+  .playback-sync-buttons,
+  .beat-setup-group,
+  .beat-setup-actions,
+  .bleed-preset-group,
+  .project-export-grid {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .project-export-grid {
+    display: flex;
+  }
+
+  .controls button,
+  .playback-sync-buttons button,
+  .beat-setup-group button {
+    min-height: 26px;
+    padding: 5px 9px;
+  }
+
+  .transport-bpm input,
+  .beat-setup-metronome-volume {
+    min-height: 26px;
+  }
+
+  /* ── bar rows become two-line cards ── */
+  .bar-main-row {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 0;
+    gap: 6px;
+    padding: 7px 6px;
+  }
+
+  /* Forced onto its own line: bar number, takes, Ø, swap, star, delete. */
+  .bar-controls-left {
+    flex: 1 0 100%;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .bar-gains {
+    flex: 1 1 auto;
+    height: 34px;
+  }
+
+  .bar-gain-row {
+    height: 34px;
+  }
+
+  .bar-loop-segment {
+    flex: 0 0 auto;
+  }
+
+  .bar-loop-segment button {
+    min-width: 40px;
+    min-height: 34px;
+  }
+
+  .bar-transfer-action {
+    min-height: 34px;
+    font-size: 11px;
   }
 }
 

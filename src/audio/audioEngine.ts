@@ -2,13 +2,19 @@ export type LatencyCalibrationResult =
   | { status: 'ok'; delayMs: number; peak: number }
   | { status: 'no-signal'; peak: number }
 
+export type BleedCancelPreset = 'light' | 'standard' | 'heavy'
+
 export class AudioEngine {
   // Bleed removal tuning. Over-subtraction compensates for the room spreading the
-  // bleed's energy beyond the bins the reference occupies; the floor is the fraction of
-  // the original magnitude a bin may never fall below, which trades depth of removal
-  // against the warbling "musical noise" that hard-zeroed bins produce.
-  private static readonly BLEED_OVERSUBTRACTION = 2.5
-  private static readonly BLEED_SPECTRAL_FLOOR = 0.01
+  // bleed's energy beyond the bins the reference occupies; the spectral floor is the
+  // fraction of the original magnitude a bin may never fall below. Pushing the floor
+  // down deepens removal but lets bins snap toward zero, which is what produces the
+  // warbling "musical noise" — hence the floor rises as subtraction gets gentler.
+  private static readonly BLEED_PRESETS: Record<BleedCancelPreset, { overSubtraction: number; spectralFloor: number }> = {
+    light: { overSubtraction: 1.2, spectralFloor: 0.06 },
+    standard: { overSubtraction: 1.9, spectralFloor: 0.02 },
+    heavy: { overSubtraction: 2.9, spectralFloor: 0.005 },
+  }
 
   private ctx?: AudioContext
   private beatBuffer?: AudioBuffer
@@ -972,7 +978,7 @@ export class AudioEngine {
    * a sample rate that cannot be aligned). Weak correlation is not a failure — it falls
    * back to the calibrated offset with an amplitude-matched scale.
    */
-  cancelSpeakerBleed(vocalBuffer: AudioBuffer, barStartSec: number, latencyOffsetMs: number): AudioBuffer | null {
+  cancelSpeakerBleed(vocalBuffer: AudioBuffer, barStartSec: number, latencyOffsetMs: number, preset: BleedCancelPreset = 'standard'): AudioBuffer | null {
     if (!this.ctx) return null
     if (!this.beatBuffer) {
       console.warn('%c[BLEED] no backing track loaded — nothing to subtract', 'color:#fff;background:#c00;padding:2px 6px')
@@ -1018,29 +1024,31 @@ export class AudioEngine {
       gainSource = rmsGain !== null ? 'rms-amplitude-match' : 'none'
     }
 
+    const tuning = AudioEngine.BLEED_PRESETS[preset] ?? AudioEngine.BLEED_PRESETS.standard
     const output = this.ctx.createBuffer(1, vocalBuffer.length, sampleRate)
     const cleaned = output.getChannelData(0)
-    cleaned.set(this.spectralSubtract(vocal, beat, offset, alpha))
+    cleaned.set(this.spectralSubtract(vocal, beat, offset, alpha, sampleRate, tuning))
 
     const rawStats = this.measureLevel(vocal)
     const referenceStats = this.measureLevel(vocal, (i) => {
       const beatIndex = offset + i
-      const scale = alpha * AudioEngine.BLEED_OVERSUBTRACTION
+      const scale = alpha * tuning.overSubtraction
       return scale * (beatIndex >= 0 && beatIndex < beat.length ? beat[beatIndex] : 0)
     })
     const cleanedStats = this.measureLevel(cleaned)
     console.log('%c[BLEED] spectral subtraction applied', 'color:#fff;background:#063;padding:2px 6px', {
       barStartSec,
       latencyOffsetMs,
+      preset,
       alignmentOffsetSamples: offset,
       lagFromCalibrationSamples: lag,
       lagFromCalibrationMs: +((lag / sampleRate) * 1000).toFixed(2),
       alignmentSource: best ? 'correlation-refined' : 'calibrated-offset-only',
       gainSource,
       alpha: +alpha.toFixed(4),
-      overSubtractionFactor: AudioEngine.BLEED_OVERSUBTRACTION,
-      effectiveSubtractionGain: +(alpha * AudioEngine.BLEED_OVERSUBTRACTION).toFixed(4),
-      spectralFloor: AudioEngine.BLEED_SPECTRAL_FLOOR,
+      overSubtractionFactor: tuning.overSubtraction,
+      effectiveSubtractionGain: +(alpha * tuning.overSubtraction).toFixed(4),
+      spectralFloor: tuning.spectralFloor,
       silenceGain: silenceGain === null ? null : +silenceGain.toFixed(4),
       wholeTakeFitGain: best ? +best.alpha.toFixed(4) : null,
       rawPeak: +rawStats.peak.toFixed(4),
@@ -1074,28 +1082,41 @@ export class AudioEngine {
    * untouched. The measured bleed gain is multiplied by an over-subtraction factor
    * because the room smears energy across neighbouring bins — removing only the
    * measured magnitude reliably leaves audible residue.
+   *
+   * The take is processed inside a padded workspace: the first and last STFT frames get
+   * fewer overlapping windows than the rest, and that uneven reconstruction is what
+   * clicks at a bar edge. Padding pushes those frames outside the region we keep, so the
+   * slice returned is exactly the original length — no trimming, no crossfade.
    */
-  private spectralSubtract(vocal: Float32Array, beat: Float32Array, offset: number, alpha: number): Float32Array {
+  private spectralSubtract(vocal: Float32Array, beat: Float32Array, offset: number, alpha: number, sampleRate: number, tuning: { overSubtraction: number; spectralFloor: number }): Float32Array {
     const N = 2048
     const hop = N / 4
-    const subtractionGain = alpha * AudioEngine.BLEED_OVERSUBTRACTION
+    const pad = 1024
+    const subtractionGain = alpha * tuning.overSubtraction
     const window = new Float32Array(N)
     for (let i = 0; i < N; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N)
 
     const length = vocal.length
-    const out = new Float32Array(length)
-    const normalisation = new Float32Array(length)
+    const paddedLength = length + pad * 2
+    const paddedVocal = new Float32Array(paddedLength)
+    paddedVocal.set(vocal, pad)
+    // The reference stays continuous through the padding — the backing track is fully
+    // available either side of the bar, so those frames subtract against real audio.
+    const paddedBeatOffset = offset - pad
+
+    const out = new Float32Array(paddedLength)
+    const normalisation = new Float32Array(paddedLength)
     const vocalRe = new Float32Array(N)
     const vocalIm = new Float32Array(N)
     const beatRe = new Float32Array(N)
     const beatIm = new Float32Array(N)
 
-    for (let start = 0; start < length; start += hop) {
+    for (let start = 0; start < paddedLength; start += hop) {
       for (let i = 0; i < N; i++) {
         const vocalIndex = start + i
-        vocalRe[i] = vocalIndex < length ? vocal[vocalIndex] * window[i] : 0
+        vocalRe[i] = vocalIndex < paddedLength ? paddedVocal[vocalIndex] * window[i] : 0
         vocalIm[i] = 0
-        const beatIndex = offset + start + i
+        const beatIndex = paddedBeatOffset + start + i
         beatRe[i] = beatIndex >= 0 && beatIndex < beat.length ? beat[beatIndex] * window[i] : 0
         beatIm[i] = 0
       }
@@ -1106,7 +1127,7 @@ export class AudioEngine {
         const magnitude = Math.hypot(vocalRe[k], vocalIm[k])
         if (magnitude < 1e-12) continue
         const bleedMagnitude = Math.hypot(beatRe[k], beatIm[k])
-        const residual = Math.max(magnitude - subtractionGain * bleedMagnitude, magnitude * AudioEngine.BLEED_SPECTRAL_FLOOR)
+        const residual = Math.max(magnitude - subtractionGain * bleedMagnitude, magnitude * tuning.spectralFloor)
         // Scaling the complex pair preserves its argument, i.e. the mic's phase.
         const scale = residual / magnitude
         vocalRe[k] *= scale
@@ -1116,7 +1137,7 @@ export class AudioEngine {
       this.fft(vocalRe, vocalIm, true)
       for (let i = 0; i < N; i++) {
         const outIndex = start + i
-        if (outIndex >= length) break
+        if (outIndex >= paddedLength) break
         out[outIndex] += vocalRe[i] * window[i]
         normalisation[outIndex] += window[i] * window[i]
       }
@@ -1124,10 +1145,29 @@ export class AudioEngine {
 
     // Dividing by the accumulated squared window makes overlap-add exact for any
     // hop size, rather than relying on a hand-tuned constant.
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < paddedLength; i++) {
       if (normalisation[i] > 1e-8) out[i] /= normalisation[i]
     }
-    return out
+    // Filtered before slicing so the filter's own settling transient stays in the pad.
+    this.removeDcOffset(out, sampleRate)
+    return out.slice(pad, pad + length)
+  }
+
+  // One-pole high pass. Spectral subtraction can leave a small standing offset in the
+  // lowest bins, which reads as a step at a buffer edge rather than as audible tone.
+  private removeDcOffset(samples: Float32Array, sampleRate: number, cutoffHz = 20) {
+    const dt = 1 / sampleRate
+    const rc = 1 / (2 * Math.PI * cutoffHz)
+    const coefficient = rc / (rc + dt)
+    let previousInput = samples.length ? samples[0] : 0
+    let previousOutput = 0
+    for (let i = 0; i < samples.length; i++) {
+      const input = samples[i]
+      const output = coefficient * (previousOutput + input - previousInput)
+      samples[i] = output
+      previousInput = input
+      previousOutput = output
+    }
   }
 
   // In-place iterative radix-2 Cooley-Tukey. Length must be a power of two.

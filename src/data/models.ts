@@ -33,6 +33,8 @@ export interface Take {
   selected: boolean
   locked?: boolean
   bleedCancelled?: boolean
+  /** Reserved for multi-user projects; local recordings leave this as the local user. */
+  userId?: string
   createdAt: string
 }
 

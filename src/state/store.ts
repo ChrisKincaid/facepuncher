@@ -1,6 +1,21 @@
 import { create } from 'zustand'
 import type { Bar, MixSettings, Project, Take } from '../data/models'
 
+/**
+ * A take staged for relocation. Holds the audio's fileId rather than a decoded
+ * AudioBuffer: paste has to persist a blob, and every consumer already resolves audio
+ * through the blob caches by fileId, so carrying a buffer here would duplicate
+ * megabytes of PCM for no benefit.
+ */
+export interface TakeClipboard {
+  sourceTakeId: string
+  sourceBarIndex: number
+  fileId: string
+  gain: number
+  bleedCancelled?: boolean
+  action: 'copy' | 'cut'
+}
+
 interface UIState {
   currentBarIndex: number
   isRecording: boolean
@@ -9,6 +24,7 @@ interface UIState {
   armedTakeByBar: Record<number, number[]>
   audioUrl?: string
   beatFile?: File
+  clipboardTake: TakeClipboard | null
 }
 
 interface StoreState extends UIState {
@@ -33,6 +49,9 @@ interface StoreState extends UIState {
   selectTake: (barIndex: number, takeId: string) => void
   clearTakeSelection: (barIndex: number) => void
   deleteTake: (takeId: string) => void
+  relocateTake: (takeId: string, targetBarIndex: number) => { ok: boolean; reason?: string }
+  placeTake: (barIndex: number, take: Take) => { ok: boolean; reason?: string }
+  setClipboardTake: (clip: TakeClipboard | null) => void
   restoreTake: (take: Take, index: number) => void
   deleteAllTakes: () => { deletedFileIds: string[] }
   toggleTakeLock: (takeId: string) => void
@@ -69,6 +88,11 @@ export const useStore = create<StoreState>((set, get) => ({
   isVocalMuted: false,
   loopRange: undefined,
   armedTakeByBar: {},
+  clipboardTake: null,
+
+  setClipboardTake(clip) {
+    set({ clipboardTake: clip })
+  },
 
   setProject(project) {
     set({ project })
@@ -249,10 +273,46 @@ export const useStore = create<StoreState>((set, get) => ({
     return { deletedFileIds }
   },
 
+  // Moves a take to another bar, appending into that bar's next free slot. The audio
+  // file is untouched — only which bar owns it changes.
+  relocateTake(takeId, targetBarIndex) {
+    const state = get()
+    const target = state.project.takes.find((take) => take.takeId === takeId)
+    if (!target) return { ok: false, reason: 'missing' }
+    if (target.barIndex === targetBarIndex) return { ok: true }
+    const destinationCount = state.project.takes.filter((take) => take.barIndex === targetBarIndex).length
+    if (destinationCount >= 5) return { ok: false, reason: 'bar-full' }
+
+    const moved: Take = { ...target, barIndex: targetBarIndex, selected: true }
+    const others = state.project.takes.filter((take) => take.takeId !== takeId)
+    // Deselect whatever was active in the destination, then make sure the bar it left
+    // still has something selected.
+    const next = others.map((take) => take.barIndex === targetBarIndex ? { ...take, selected: false } : take)
+    const sourceRemaining = next.filter((take) => take.barIndex === target.barIndex)
+    if (sourceRemaining.length && !sourceRemaining.some((take) => take.selected)) {
+      const first = sourceRemaining[0]
+      const index = next.findIndex((take) => take.takeId === first.takeId)
+      next[index] = { ...first, selected: true }
+    }
+    set({ project: { ...state.project, takes: [...next, moved] } })
+    return { ok: true }
+  },
+
+  // Appends an already-built take into a bar's next free slot without displacing any
+  // existing take.
+  placeTake(barIndex, take) {
+    const state = get()
+    const destinationCount = state.project.takes.filter((item) => item.barIndex === barIndex).length
+    if (destinationCount >= 5) return { ok: false, reason: 'bar-full' }
+    const placed: Take = { ...take, barIndex, selected: true }
+    const takes = state.project.takes.map((item) => item.barIndex === barIndex ? { ...item, selected: false } : item)
+    set({ project: { ...state.project, takes: [...takes, placed] } })
+    return { ok: true }
+  },
+
   // Re-inserts a deleted take at its original position so an undo restores the exact
   // slot ordering the user saw, not just "somewhere in this bar".
-  restoreTake(take, index) {
-    set((state) => {
+  restoreTake(take, index) {    set((state) => {
       if (state.project.takes.some((item) => item.takeId === take.takeId)) return state
       const takes = [...state.project.takes]
       takes.splice(Math.max(0, Math.min(index, takes.length)), 0, take)
