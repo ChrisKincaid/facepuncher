@@ -131,15 +131,53 @@ body {
 }
 
 .transport-bpm input {
-  width: 32px;
+  width: 56px;
+  min-width: 56px;
   min-height: 16px;
-  padding: 2px 3px;
+  padding: 0 6px;
+  text-align: center;
 }
 
 .transport-bpm button {
   min-height: 16px;
   padding: 2px 3px;
   font-size: 5.5px;
+}
+
+.beat-setup-metronome-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.beat-setup-metronome-group button {
+  min-width: 62px;
+  min-height: 16px;
+  padding: 2px 6px;
+  font-size: 5.5px;
+  white-space: nowrap;
+}
+
+.beat-setup-metronome-volume {
+  flex: 0 0 50px;
+  width: 50px;
+}
+
+/* Pinned to the far right of the Beat Setup row, Set Bar 1 outermost. */
+.beat-setup-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.beat-setup-auto-bpm,
+.beat-setup-set-bar1 {
+  flex: 0 0 auto;
+  min-width: 74px;
 }
 
 .playback-wide-button {
@@ -743,10 +781,27 @@ body {
   min-height: 18px;
   padding: 3px 6px;
   font-size: 6px;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  color: #e0e0e0;
+  background-color: #1e1e24;
   border: 1px solid var(--border);
   border-radius: 4px;
+  /* Tells the browser to render the native popup list in dark mode — the popup is OS
+     drawn, so this does more for it than any background rule below. */
+  color-scheme: dark;
+}
+
+.project-preset-select option {
+  background-color: #1e1e24;
+  color: #e0e0e0;
+}
+
+.project-preset-select option:checked,
+.project-preset-select option:hover {
+  color: #041014;
+  background-color: var(--accent);
+  /* Chrome/Blink ignores background-color on a highlighted option; an inset shadow is
+     the one property it does honour, so both are set to keep contrast everywhere. */
+  box-shadow: 0 0 0 100px var(--accent) inset;
 }
 
 .project-file-path {
@@ -1473,6 +1528,49 @@ input[type='file'] {
 /* Stacked above the undo toast so both can be on screen at once. */
 .project-toast {
   bottom: 33px;
+}
+
+.calibrate-mic-button {
+  margin-left: auto;
+}
+
+.calibration-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.calibration-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 14px 16px;
+  text-align: center;
+  font-size: 7px;
+  line-height: 1.4;
+  color: var(--text);
+  background: #1b1d29;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+
+.calibration-modal .button-spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.calibration-countdown {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
 }
 
 .button-spinner {

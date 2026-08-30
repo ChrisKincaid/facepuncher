@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
 import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { Mixer } from './Mixer'
@@ -112,6 +112,11 @@ export default function App() {
   const cursorRef = useRef(0)
   const [monitorEnabled, setMonitorEnabled] = useState(false)
   const [monitorGain, setMonitorGain] = useState(0.8)
+  const [metronomeEnabled, setMetronomeEnabled] = useState(false)
+  const [metronomeVolume, setMetronomeVolume] = useState(0.5)
+  const [isCalibratingMic, setIsCalibratingMic] = useState(false)
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false)
+  const [calibrationCountdown, setCalibrationCountdown] = useState(0)
   const [detectBusy, setDetectBusy] = useState(false)
   const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
   const [showImportHelp, setShowImportHelp] = useState(false)
@@ -119,6 +124,36 @@ export default function App() {
   const [showProject, setShowProject] = useState(true)
   const [showVolume, setShowVolume] = useState(true)
   const upperSectionsOpen = showVolume || showSetup || showProject
+  const focusScrollAnchorRef = useRef<{ id: string; top: number } | null>(null)
+
+  // Collapsing the sections above the bar list changes the document height, which would
+  // otherwise slide a different bar under the user's eyes. Record which bar row is
+  // nearest the viewport centre and where it sits, so it can be put back afterwards.
+  const captureFocusScrollAnchor = () => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('.bar-row'))
+    if (!rows.length) { focusScrollAnchorRef.current = null; return }
+    const viewportCentre = window.innerHeight / 2
+    let closest = rows[0]
+    let closestDistance = Infinity
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect()
+      const distance = Math.abs(rect.top + rect.height / 2 - viewportCentre)
+      if (distance < closestDistance) { closestDistance = distance; closest = row }
+    }
+    focusScrollAnchorRef.current = { id: closest.id, top: closest.getBoundingClientRect().top }
+  }
+
+  // Runs before paint so the correction is never visible as a jump.
+  useLayoutEffect(() => {
+    const anchor = focusScrollAnchorRef.current
+    if (!anchor) return
+    focusScrollAnchorRef.current = null
+    const row = document.getElementById(anchor.id)
+    if (!row) return
+    const drift = row.getBoundingClientRect().top - anchor.top
+    if (drift) window.scrollBy(0, drift)
+  }, [upperSectionsOpen])
+
   const [showWaveform, setShowWaveform] = useState(true)
   // Firefox's AudioWorklet delivers empty input on some render quanta during sustained loud
   // input, silently corrupting recordings — confirmed unfixable from JS; recommend Chromium.
@@ -264,6 +299,13 @@ export default function App() {
       return
     }
     audioEngine.setLoop(undefined, undefined)
+    // Keep the UI on the engine's re-based position so turning loop off doesn't
+    // read as a jump on the playhead/waveform.
+    if (isPlayingRef.current) {
+      const position = audioEngine.currentTime
+      previousAudioTimeRef.current = position
+      setCursor(position)
+    }
   }, [loopEnabled, loopRange, project.bars])
 
   useEffect(() => {
@@ -343,22 +385,24 @@ export default function App() {
     }
   }
 
-  const handleAutoDetectBars = async () => {
+  // Tempo only: the Bar 1 anchor and offset are passed straight back through so
+  // detection can never shift where the grid starts.
+  const handleAutoBpm = async () => {
     const buf = audioEngine.beatAudioBuffer
     if (!buf || !project.beat.durationSec) return
-    const existingAnchor = bar1AnchorRef.current ?? project.beat.bar1AnchorTime
+    const anchor = bar1AnchorRef.current ?? project.beat.bar1AnchorTime
     setDetectBusy(true)
-    const detected = await estimateBpmFromBuffer(buf, existingAnchor ?? 0)
+    const detected = await estimateBpmFromBuffer(buf, anchor ?? 0)
     setDetectBusy(false)
     if (!detected) { setStatus('BPM detection failed. Try adjusting manually.'); return }
     const bpm = normalizeDetectedBpm(detected.bpm)
     manualBpmRef.current = false
-    const anchor = existingAnchor ?? detected.offsetSec
-    const offsetSec = anchor
-    bar1AnchorRef.current = anchor
-    setBeatMeta({ ...project.beat, bpm, offsetSec, bar1AnchorTime: anchor })
-    setBars(generateBars(project.beat.durationSec, bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, offsetSec, anchor))
-    setStatus(`Created bars at ${bpm} BPM, offset ${offsetSec.toFixed(3)}s (${Math.round(detected.confidence * 100)}% confidence).`)
+    setBpmInput(String(bpm))
+    setBeatMeta({ ...project.beat, bpm, bar1AnchorTime: anchor })
+    if (anchor !== undefined) {
+      setBars(generateBars(project.beat.durationSec, bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, project.beat.offsetSec ?? anchor, anchor))
+    }
+    setStatus(`Auto BPM detected ${bpm} (${Math.round(detected.confidence * 100)}% confidence).`)
   }
 
   // Detection can latch onto half/double time, so fold the estimate into a musically sane
@@ -451,7 +495,9 @@ export default function App() {
     manualOffsetRef.current = true
     bar1AnchorRef.current = anchor
     setBar1AnchorTime(anchor)
-    if (project.beat.durationSec && project.bars.length) {
+    // Builds the grid on the first press too, so this no longer depends on BPM
+    // detection having run to produce bars.
+    if (project.beat.durationSec && project.beat.bpm > 0) {
       setBars(generateBars(project.beat.durationSec, project.beat.bpm, project.beat.timeSig.beatsPerBar, project.beat.timeSig.beatUnit, anchor, anchor))
     }
   }, [project.beat, setBar1AnchorTime, setBars, totalDuration])
@@ -489,6 +535,56 @@ export default function App() {
     isPlayingRef.current = false
   }, [audioLoaded])
 
+  // Keeps the metronome phase-locked to the real beat grid: (re)starts it whenever
+  // playback begins or the beat grid changes, stops it the instant playback ends.
+  useEffect(() => {
+    if (!audioLoaded || !metronomeEnabled || !isPlaying) {
+      audioEngine.stopMetronome()
+      return
+    }
+    const anchor = project.beat.bar1AnchorTime ?? project.bars[0]?.startSec ?? project.beat.offsetSec ?? 0
+    audioEngine.startMetronome(project.beat.bpm || 120, project.beat.timeSig.beatsPerBar, anchor, audioEngine.currentTime)
+    return () => audioEngine.stopMetronome()
+  }, [audioLoaded, metronomeEnabled, isPlaying, project.beat.bpm, project.beat.bar1AnchorTime, project.beat.offsetSec, project.beat.timeSig.beatsPerBar, project.bars])
+
+  useEffect(() => {
+    audioEngine.setMetronomeVolume(metronomeVolume)
+  }, [metronomeVolume])
+
+  const handleCalibrateMicTiming = async () => {
+    if (isCalibratingMic) return
+    const wasPlaying = isPlayingRef.current
+    if (wasPlaying) handlePause()
+    audioEngine.stopMetronome()
+    setIsCalibratingMic(true)
+    setShowCalibrationModal(true)
+    try {
+      for (let count = 3; count > 0; count--) {
+        setCalibrationCountdown(count)
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      setCalibrationCountdown(0)
+      const result = await audioEngine.runLatencyCalibration()
+      if (result.status === 'no-signal') {
+        showProjectToast('No speaker feedback detected. If you are using headphones, please use the \u201cShift Vocals\u201d slider or nudge buttons to set your timing manually.', 9000)
+        setStatus('Mic latency calibration cancelled \u2014 no speaker feedback detected.')
+      } else {
+        updateGlobalSync(result.delayMs)
+        showProjectToast('Mic Latency Calibrated!')
+        setStatus(`Mic latency calibrated \u2014 applied ${result.delayMs} ms offset.`)
+      }
+    } catch (err) {
+      console.error('mic latency calibration failed', err)
+      setStatus('Mic latency calibration failed \u2014 see console for details.')
+      showProjectToast('Mic latency calibration failed — see console for details.')
+    } finally {
+      setIsCalibratingMic(false)
+      setShowCalibrationModal(false)
+      setCalibrationCountdown(0)
+      if (wasPlaying) handlePlay()
+    }
+  }
+
   const clearTimers = () => {
     if (startTimer.current) { window.clearTimeout(startTimer.current); startTimer.current = null }
     if (recordTimer.current) { window.clearTimeout(recordTimer.current); recordTimer.current = null }
@@ -520,6 +616,9 @@ export default function App() {
     const clampedEnd = Math.max(clampedStart, Math.min(end, barCount - 1))
     chainedThroughBarRef.current = -1
     setLoopRange({ start: clampedStart, end: clampedEnd })
+    // Both boundaries are now defined, so arm the transport loop rather than making
+    // the user reach for the top toggle as a separate step.
+    setLoopEnabled(true)
   }
 
   const handleLoopStartChange = (start: number) => {
@@ -540,7 +639,6 @@ export default function App() {
     }
     if (!project.bars.length) return
     handleLoopChange(0, Math.min(bars - 1, project.bars.length - 1))
-    setLoopEnabled(true)
   }
 
   const isQuickLoopActive = (bars: number) => {
@@ -995,17 +1093,18 @@ export default function App() {
   }, [currentBarIndex, handlePause, handlePlay, isPlaying, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar])
 
   // Auto-dismissing toast; the packaging message instead stays up until export resolves.
-  const showProjectToast = (message: string) => {
+  const showProjectToast = (message: string, durationMs = 4000) => {
     if (projectToastTimer.current) window.clearTimeout(projectToastTimer.current)
     setProjectToast(message)
     projectToastTimer.current = window.setTimeout(() => {
       projectToastTimer.current = null
       setProjectToast(null)
-    }, 4000)
+    }, durationMs)
   }
 
   const handleExportProject = async () => {
     if (isExportingProject) return
+    if (isPlayingRef.current) handlePause()
     setIsExportingProject(true)
     setProjectToast('Compacting audio and packaging project\u2026 Please wait.')
     try {
@@ -1465,7 +1564,6 @@ export default function App() {
               </div>
             )}
             <div className="controls">
-              {detectBusy && <span className="text-muted">Detecting BPM\u2026</span>}
               <div className="transport-bpm" onClick={(event) => event.stopPropagation()}>
                 <span>BPM</span>
                 <input
@@ -1498,18 +1596,50 @@ export default function App() {
                   onChange={(e) => applyOffset(Number(e.target.value) || 0)}
                 />
               </label>
-              <button
-                title="Set Bar 1 to the current audio position and rebuild the grid"
-                disabled={!audioLoaded || detectBusy}
-                onClick={() => {
-                  const position = isPlaying ? cursor : playhead
-                  setBar1Anchor(position)
-                  setStatus(`Bar 1 set to ${position.toFixed(3)}s. Building bars\u2026`)
-                  void handleAutoDetectBars()
-                }}
-              >
-                {detectBusy ? 'Detecting\u2026' : 'Set Bar 1'}
-              </button>
+              <div className="beat-setup-metronome-group" onClick={(event) => event.stopPropagation()}>
+                <button
+                  type="button"
+                  className={metronomeEnabled ? 'loop-toggle-on' : 'secondary'}
+                  onClick={() => setMetronomeEnabled((enabled) => !enabled)}
+                  disabled={!audioLoaded}
+                  title={metronomeEnabled ? 'Metronome is on — click to turn off' : 'Metronome is off — click to turn on'}
+                >
+                  {'\u{1F3B5} Metronome'}
+                </button>
+                <input
+                  type="range"
+                  className="beat-setup-metronome-volume"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={metronomeVolume}
+                  onChange={(e) => setMetronomeVolume(Number(e.target.value))}
+                  aria-label="Metronome volume"
+                  title="Metronome volume"
+                />
+              </div>
+              <div className="beat-setup-actions">
+                <button
+                  className="beat-setup-auto-bpm"
+                  title="Detect the tempo without moving the Bar 1 anchor"
+                  disabled={!audioLoaded || detectBusy}
+                  onClick={() => { void handleAutoBpm() }}
+                >
+                  {detectBusy ? 'Detecting\u2026' : 'Auto BPM'}
+                </button>
+                <button
+                  className="beat-setup-set-bar1"
+                  title="Set Bar 1 to the current audio position and rebuild the grid"
+                  disabled={!audioLoaded || detectBusy}
+                  onClick={() => {
+                    const position = isPlaying ? cursor : playhead
+                    setBar1Anchor(position)
+                    setStatus(`Bar 1 set to ${position.toFixed(3)}s.`)
+                  }}
+                >
+                  Set Bar 1
+                </button>
+              </div>
             </div>
           <div className="beat-setup-anchor">
             {audioEngine.beatAudioBuffer && (
@@ -1584,6 +1714,14 @@ export default function App() {
                   <button className="secondary" onClick={() => updateGlobalSync(project.latencyOffsetMs + 1)} title="Shift vocals 1 millisecond later"><span>1 MS</span><span className="sync-arrow sync-arrow-right sync-arrow-1" aria-hidden="true"><i /></span></button>
                 </div>
                 <button className="secondary playback-sync-reset" onClick={() => updateGlobalSync(0)}>Reset</button>
+                <button
+                  className="secondary calibrate-mic-button"
+                  onClick={handleCalibrateMicTiming}
+                  disabled={isCalibratingMic || !audioLoaded}
+                  title="Plays a short test pulse through speakers and listens for it on the mic to auto-set vocal sync"
+                >
+                  {isCalibratingMic ? 'Calibrating\u2026' : 'Calibrate Mic Timing'}
+                </button>
               </div>
           </div>
           </section>
@@ -1646,6 +1784,7 @@ export default function App() {
             onDeleteAllTakes={handleDeleteAllTakes}
             focusMode={!upperSectionsOpen}
             onToggleFocus={() => {
+              captureFocusScrollAnchor()
               const next = !upperSectionsOpen
               setShowVolume(next)
               setShowSetup(next)
@@ -1671,6 +1810,17 @@ export default function App() {
           <button type="button" className="undo-toast-action" onClick={handleUndoDelete}>
             Undo ({undoSecondsLeft}s)
           </button>
+        </div>
+      )}
+
+      {showCalibrationModal && (
+        <div className="calibration-modal-overlay" role="presentation">
+          <div className="calibration-modal" role="alertdialog" aria-live="assertive">
+            {calibrationCountdown > 0
+              ? <span className="calibration-countdown" aria-hidden="true">{calibrationCountdown}</span>
+              : <span className="button-spinner" aria-hidden="true" />}
+            <p>Calibrating Mic Latency... Stand by for test clicks. Please keep your room quiet.</p>
+          </div>
         </div>
       )}
     </div>

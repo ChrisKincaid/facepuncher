@@ -57,7 +57,7 @@ export function BarList({
   onFocusBar,
   onTakeGain,
 }: Props) {
-  const [barScale, setBarScale] = useState<BarScale>(1)
+  const [barScale, setBarScale] = useState<BarScale>(2)
   return (
     <div className="panel bar-list-panel">
       <div className="collapsible-header" style={{ marginBottom: 6 }}>
@@ -73,7 +73,7 @@ export function BarList({
               onToggleFocus()
             }}
           >
-            {focusMode ? 'Show All' : 'Focus Bars'}
+            {focusMode ? 'Show All' : 'BARS ONLY'}
           </button>
           <button
             type="button"

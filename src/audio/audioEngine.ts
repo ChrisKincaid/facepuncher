@@ -1,3 +1,7 @@
+export type LatencyCalibrationResult =
+  | { status: 'ok'; delayMs: number; peak: number }
+  | { status: 'no-signal'; peak: number }
+
 export class AudioEngine {
   private ctx?: AudioContext
   private beatBuffer?: AudioBuffer
@@ -35,6 +39,18 @@ export class AudioEngine {
   private masterVocalGainValue = 1
   private vocalMuted = false
   private loopRegion?: { start: number; end: number }
+  private metronomeGain?: GainNode
+  private metronomeVolume = 0.5
+  private metronomeOn = false
+  private metronomeIntervalId?: number
+  private metronomeNextTickTime = 0
+  private metronomeBeatIndex = 0
+  private metronomeBpm = 120
+  private metronomeBeatsPerBar = 4
+  private metronomeAnchorSec = 0
+  private metronomeScheduledNodes: { osc: OscillatorNode; gain: GainNode; time: number }[] = []
+  private metronomeScheduledTimes: number[] = []
+  private metronomeLastTickTime = -Infinity
 
   get contextState() {
     return this.ctx?.state ?? 'not-created'
@@ -78,6 +94,14 @@ export class AudioEngine {
       if (this.beatSource) {
         this.beatSource.loop = false
       }
+      // While looping, currentTime reports the wrapped phase but the underlying
+      // playingOffset + elapsed clock keeps growing past loopEnd. Clearing the region
+      // would expose that raw value and snap the playhead forward, so re-base the
+      // clock onto the position that is actually audible right now.
+      if (this.isPlaying && this.ctx) {
+        this.playingOffset = position
+        this.playStartedAt = this.ctx.currentTime
+      }
     } else {
       this.loopRegion = { start, end }
       const loopLength = end - start
@@ -92,6 +116,8 @@ export class AudioEngine {
         this.beatSource.loopEnd = end
       }
     }
+    // The wrap point just moved, so any tick queued past the old boundary is stale.
+    this.resyncMetronome(this.currentTime)
   }
 
   setMasterBeatGain(value: number) {
@@ -185,6 +211,7 @@ export class AudioEngine {
     }
 
     source.start(0, offsetSec)
+    this.resyncMetronome(offsetSec)
     console.log('[Punchin] beat source started', { contextState: this.ctx.state, offsetSec })
   }
 
@@ -355,6 +382,8 @@ export class AudioEngine {
     this.playingOffset = Math.max(0, time)
     if (this.beatSource) {
       this.play(this.playingOffset)
+    } else {
+      this.resyncMetronome(this.playingOffset)
     }
   }
 
@@ -556,6 +585,156 @@ export class AudioEngine {
     }
   }
 
+  // Starts a phase-locked click track: beat 1 of every bar gets the higher accent
+  // tone, beats 2-4 get the lower woodblock/hi-hat tone. positionSec/anchorSec are
+  // both in beat-file time so the very next tick lands exactly on the real beat grid
+  // instead of wherever the metronome happened to be started.
+  startMetronome(bpm: number, beatsPerBar: number, anchorSec: number, positionSec: number) {
+    if (!this.ctx) return
+    this.stopMetronome()
+    this.metronomeBpm = Math.max(1, bpm)
+    this.metronomeBeatsPerBar = Math.max(1, Math.round(beatsPerBar))
+    this.metronomeAnchorSec = anchorSec
+    this.metronomeGain = this.ctx.createGain()
+    this.metronomeGain.gain.value = this.metronomeVolume
+    this.metronomeGain.connect(this.ctx.destination)
+
+    this.alignMetronomePhase(positionSec, this.ctx.currentTime)
+    this.metronomeOn = true
+    this.scheduleMetronomeTicks()
+    this.metronomeIntervalId = window.setInterval(() => this.scheduleMetronomeTicks(), 25)
+  }
+
+  /**
+   * Re-locks the click to the transport after a discontinuity (seek/scrub, or a loop
+   * wrap). Drops every already-queued tick — they were scheduled against the old
+   * position and would fire against the new one — then recomputes the beat index and
+   * sub-beat offset from positionSec so the next click lands on the real grid.
+   */
+  resyncMetronome(positionSec: number) {
+    if (!this.ctx || !this.metronomeOn) return
+    this.cancelScheduledMetronomeTicks()
+    this.alignMetronomePhase(positionSec, this.ctx.currentTime)
+    // A beat that just sounded can land back on the schedule as "the next beat" when
+    // the realign happens right on a boundary. Push past it so the click never doubles.
+    const beatDuration = 60 / this.metronomeBpm
+    if (this.metronomeNextTickTime - this.metronomeLastTickTime < beatDuration * 0.5) {
+      this.metronomeNextTickTime += beatDuration
+      this.metronomeBeatIndex = (this.metronomeBeatIndex + 1) % this.metronomeBeatsPerBar
+    }
+    this.scheduleMetronomeTicks()
+  }
+
+  // Places the next tick on the first beat at/after positionSec, given that
+  // positionSec is heard at ctxTimeAtPosition.
+  private alignMetronomePhase(positionSec: number, ctxTimeAtPosition: number) {
+    const beatDuration = 60 / this.metronomeBpm
+    const elapsedBeats = (positionSec - this.metronomeAnchorSec) / beatDuration
+    const nextBeatNumber = Math.ceil(elapsedBeats - 1e-6)
+    const nextBeatPositionSec = this.metronomeAnchorSec + nextBeatNumber * beatDuration
+    const deltaToNextBeat = Math.max(0, nextBeatPositionSec - positionSec)
+    this.metronomeBeatIndex = ((nextBeatNumber % this.metronomeBeatsPerBar) + this.metronomeBeatsPerBar) % this.metronomeBeatsPerBar
+    this.metronomeNextTickTime = ctxTimeAtPosition + deltaToNextBeat
+  }
+
+  // Drops pending ticks. Ticks that already started are left to ring out (killing them
+  // mid-click would be audible as a cut), but their time is recorded so a realign can
+  // tell which beat was the last one actually heard.
+  private cancelScheduledMetronomeTicks(includeSounding = false) {
+    const now = this.ctx?.currentTime ?? 0
+    const surviving: typeof this.metronomeScheduledNodes = []
+    for (const node of this.metronomeScheduledNodes) {
+      if (!includeSounding && node.time <= now) {
+        surviving.push(node)
+        continue
+      }
+      try { node.osc.stop() } catch { /* already stopped/ended */ }
+      node.osc.disconnect()
+      node.gain.disconnect()
+    }
+    this.metronomeScheduledNodes = surviving
+    // Discard the times of ticks we just cancelled, then take the newest remaining one
+    // as the last beat actually heard. Keeping a short history matters because a node
+    // that finished ringing is already gone from metronomeScheduledNodes.
+    this.metronomeScheduledTimes = includeSounding
+      ? []
+      : this.metronomeScheduledTimes.filter((time) => time <= now && time > now - 5)
+    this.metronomeLastTickTime = this.metronomeScheduledTimes.length
+      ? Math.max(...this.metronomeScheduledTimes)
+      : -Infinity
+  }
+
+  stopMetronome() {
+    this.metronomeOn = false
+    if (this.metronomeIntervalId !== undefined) {
+      window.clearInterval(this.metronomeIntervalId)
+      this.metronomeIntervalId = undefined
+    }
+    this.cancelScheduledMetronomeTicks(true)
+    this.metronomeLastTickTime = -Infinity
+    this.metronomeGain?.disconnect()
+    this.metronomeGain = undefined
+  }
+
+  setMetronomeVolume(value: number) {
+    this.metronomeVolume = Math.max(0, Math.min(1, value))
+    if (this.metronomeGain) this.metronomeGain.gain.value = this.metronomeVolume
+  }
+
+  // Lookahead scheduler: queues every tick that falls within the next 150ms so
+  // playback stays sample-accurate even though this is driven by a 25ms timer.
+  private scheduleMetronomeTicks() {
+    if (!this.ctx || !this.metronomeOn || !this.metronomeGain) return
+    const lookaheadSec = 0.15
+    const beatDuration = 60 / this.metronomeBpm
+    const horizon = this.ctx.currentTime + lookaheadSec
+    // Guard against pathological loops (loop shorter than one beat) spinning forever.
+    let guard = 0
+    while (this.metronomeNextTickTime < horizon && guard++ < 512) {
+      // If the transport wraps before this tick would fire, re-anchor the counter to
+      // the loop start instead — otherwise the click keeps counting straight through
+      // the jump and drifts out of phase for the rest of the loop.
+      if (this.applyMetronomeLoopWrap()) continue
+      const accent = this.metronomeBeatIndex === 0
+      this.playMetronomeTick(this.metronomeNextTickTime, accent)
+      this.metronomeScheduledTimes.push(this.metronomeNextTickTime)
+      this.metronomeNextTickTime += beatDuration
+      this.metronomeBeatIndex = (this.metronomeBeatIndex + 1) % this.metronomeBeatsPerBar
+    }
+  }
+
+  // Returns true if the pending tick fell past the loop boundary and the phase was
+  // re-anchored to the loop start (so the caller should re-evaluate it).
+  private applyMetronomeLoopWrap(): boolean {
+    if (!this.ctx || !this.loopRegion || !this.isPlaying) return false
+    const { start, end } = this.loopRegion
+    if (end - start <= 0) return false
+    const loopEndCtxTime = this.ctxTimeForPosition(end)
+    if (loopEndCtxTime <= this.ctx.currentTime) return false
+    if (this.metronomeNextTickTime < loopEndCtxTime - 1e-6) return false
+    this.alignMetronomePhase(start, loopEndCtxTime)
+    return true
+  }
+
+  private playMetronomeTick(time: number, accent: boolean) {
+    if (!this.ctx || !this.metronomeGain) return
+    const osc = this.ctx.createOscillator()
+    const gain = this.ctx.createGain()
+    osc.frequency.value = accent ? 1600 : 950
+    gain.gain.setValueAtTime(0.0001, time)
+    gain.gain.linearRampToValueAtTime(accent ? 1 : 0.6, time + 0.004)
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05)
+    osc.connect(gain).connect(this.metronomeGain)
+    osc.start(time)
+    osc.stop(time + 0.06)
+    const entry = { osc, gain, time }
+    this.metronomeScheduledNodes.push(entry)
+    osc.onended = () => {
+      this.metronomeScheduledNodes = this.metronomeScheduledNodes.filter((node) => node !== entry)
+      gain.disconnect()
+    }
+  }
+
   playCountIn(bpm: number, bars: number, beatsPerBar = 4) {
     if (!this.ctx) return
     const totalBeats = Math.max(0, bars) * Math.max(1, beatsPerBar)
@@ -641,6 +820,133 @@ export class AudioEngine {
     out.getChannelData(0).set(data)
     this.logBufferProfile('TRIMMED TAKE (returned)', out)
     return out
+  }
+
+  // Plays a single sharp 2ms click through the speakers while recording the mic,
+  // then measures the round-trip (output -> speaker -> air -> mic -> input) delay by
+  // locating the click's first transient in the recorded buffer. Returns a structured
+  // result: 'no-signal' means nothing came back (headphones/muted mic), in which case
+  // the caller must NOT change the offset. delayMs is negative because recorded vocals
+  // lag the beat by the round-trip delay, so playback must shift earlier to compensate.
+  async runLatencyCalibration(): Promise<LatencyCalibrationResult> {
+    const ctx = await this.ensureContext()
+    await ctx.resume()
+    if (this.activeRecording) throw new Error('Cannot calibrate while a recording is already active')
+    await this.ensureMicCapture()
+    if (!this.micStream) throw new Error('Microphone is not available for calibration')
+
+    // Three trials, median-selected: a single stray room noise can corrupt one
+    // measurement, but it can't move the median of three. This is what keeps repeat
+    // triggers inside a few ms of each other rather than occasionally wild.
+    const TRIALS = 3
+    const measurements: { delayMs: number; peak: number }[] = []
+    let bestPeak = 0
+    for (let trial = 0; trial < TRIALS; trial++) {
+      const result = await this.measureImpulseDelay()
+      bestPeak = Math.max(bestPeak, result.peak)
+      if (result.delayMs !== null) measurements.push({ delayMs: result.delayMs, peak: result.peak })
+    }
+
+    if (!measurements.length) {
+      console.warn('[Punchin] latency calibration found no speaker feedback', { bestPeak: bestPeak.toFixed(4) })
+      return { status: 'no-signal', peak: bestPeak }
+    }
+
+    const sorted = measurements.map((m) => m.delayMs).sort((a, b) => a - b)
+    const medianDelayMs = sorted[Math.floor(sorted.length / 2)]
+    const spreadMs = sorted[sorted.length - 1] - sorted[0]
+    console.log('[Punchin] latency calibration result', {
+      trials: sorted, medianDelayMs, spreadMs, peak: bestPeak.toFixed(3),
+    })
+    if (spreadMs > 5) {
+      console.warn('[Punchin] calibration spread exceeded 5ms — room noise may be affecting accuracy', { spreadMs })
+    }
+    return { status: 'ok', delayMs: -medianDelayMs, peak: bestPeak }
+  }
+
+  // One impulse + capture cycle. delayMs is null when no transient rose above the
+  // detection threshold (headphones, muted mic, or output silenced).
+  private async measureImpulseDelay(): Promise<{ delayMs: number | null; peak: number }> {
+    const ctx = this.ctx!
+    const recordDurationSec = 0.5
+    const scheduleDelaySec = 0.15
+    const triggerAt = ctx.currentTime + scheduleDelaySec
+
+    // 2ms full-scale square click. Written straight into a buffer with no envelope so
+    // sample 0 is already at full amplitude — an instantaneous attack, which is what
+    // gives the recorded copy an unambiguous leading edge to lock onto.
+    const clickDurationSec = 0.002
+    const clickFrames = Math.max(1, Math.round(clickDurationSec * ctx.sampleRate))
+    const clickBuffer = ctx.createBuffer(1, clickFrames, ctx.sampleRate)
+    const clickData = clickBuffer.getChannelData(0)
+    const halfPeriod = Math.max(1, Math.round(ctx.sampleRate / 2000))
+    for (let i = 0; i < clickFrames; i++) {
+      clickData[i] = Math.floor(i / halfPeriod) % 2 === 0 ? 1 : -1
+    }
+    const clickSource = ctx.createBufferSource()
+    clickSource.buffer = clickBuffer
+    const clickGain = ctx.createGain()
+    clickGain.gain.value = 1
+    clickSource.connect(clickGain).connect(ctx.destination)
+
+    await this.startRecording(triggerAt)
+    clickSource.start(triggerAt)
+
+    const waitMs = (scheduleDelaySec + recordDurationSec) * 1000 + 50
+    await new Promise((resolve) => setTimeout(resolve, waitMs))
+
+    const recordedBuffer = await this.stopRecording(triggerAt + recordDurationSec)
+    clickSource.disconnect()
+    clickGain.disconnect()
+    if (!recordedBuffer) throw new Error('Calibration recording captured no audio — check microphone permissions')
+
+    return this.detectFirstTransient(recordedBuffer)
+  }
+
+  // Finds the leading edge of the first transient. Deliberately takes the FIRST
+  // threshold crossing rather than the loudest sample: the loudest point is often a
+  // wall reflection or the tail of room reverb arriving milliseconds later, which
+  // would inflate the measured latency.
+  private detectFirstTransient(buffer: AudioBuffer): { delayMs: number | null; peak: number } {
+    const samples = buffer.getChannelData(0)
+    const sampleRate = buffer.sampleRate
+    // Skip the first 2ms (electrical bleed-through) and stop after 400ms — anything
+    // later than that is not a plausible round-trip latency, so searching further
+    // only invites picking up unrelated room noise.
+    const searchFrom = Math.round(0.002 * sampleRate)
+    const searchTo = Math.min(samples.length, Math.round(0.4 * sampleRate))
+
+    // Noise floor measured from the pre-arrival gap so the threshold adapts to the
+    // room instead of being a fixed constant that fails on quiet or hot mics.
+    let noiseSum = 0
+    let noiseCount = 0
+    for (let i = 0; i < searchFrom; i++) { noiseSum += samples[i] * samples[i]; noiseCount++ }
+    const noiseFloor = noiseCount ? Math.sqrt(noiseSum / noiseCount) : 0
+
+    let peakValue = 0
+    for (let i = searchFrom; i < searchTo; i++) {
+      const abs = Math.abs(samples[i])
+      if (abs > peakValue) peakValue = abs
+    }
+
+    const MIN_DETECTABLE_PEAK = 0.02
+    if (peakValue < MIN_DETECTABLE_PEAK) return { delayMs: null, peak: peakValue }
+
+    // Must clear both the room's own noise and a solid fraction of the click itself,
+    // so a soft background sound before the click can't be mistaken for the arrival.
+    const threshold = Math.max(peakValue * 0.35, noiseFloor * 8, MIN_DETECTABLE_PEAK)
+    let onsetIndex = -1
+    for (let i = searchFrom; i < searchTo; i++) {
+      if (Math.abs(samples[i]) >= threshold) { onsetIndex = i; break }
+    }
+    if (onsetIndex < 0) return { delayMs: null, peak: peakValue }
+
+    // Back off to where the edge actually left the noise floor — the crossing above
+    // sits partway up the rise, and on a 2ms click that is worth a sample or two.
+    const footThreshold = Math.max(peakValue * 0.08, noiseFloor * 3)
+    while (onsetIndex > searchFrom && Math.abs(samples[onsetIndex - 1]) > footThreshold) onsetIndex--
+
+    return { delayMs: Math.round((onsetIndex / sampleRate) * 1000), peak: peakValue }
   }
 
   // Print peak + 8-segment RMS so the audible content position is unambiguous.
