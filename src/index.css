@@ -17,9 +17,6 @@
 
 html {
   scroll-behavior: smooth;
-  /* Proximity, not mandatory: mandatory would fight the user whenever they try to rest
-     the view on the panels above the bar list. */
-  scroll-snap-type: y proximity;
 }
 
 body {
@@ -1337,12 +1334,18 @@ input[type='file'] {
   margin-bottom: 4px;
 }
 
+/* Its own scroll container so bar rows snap independently of the page scroll. */
 .bar-list {
   --bar-row-height: 15px;
   --bar-ctrl-scale: 1;
   display: flex;
   flex-direction: column;
   gap: 1px;
+  max-height: calc(100vh - var(--sticky-header-height, 0px) - 70px);
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
 }
 
 .bar-list.bar-scale-2x {
@@ -1359,8 +1362,10 @@ input[type='file'] {
   position: absolute;
   right: 0;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .bar-scale-button {
@@ -1383,8 +1388,6 @@ input[type='file'] {
   background: rgba(255, 255, 255, 0.02);
   cursor: pointer;
   scroll-snap-align: start;
-  /* Keeps a snapped row clear of the sticky header rather than under it. */
-  scroll-margin-top: var(--sticky-header-height, 0px);
 }
 
 .bar-main-row {
@@ -1577,15 +1580,17 @@ input[type='file'] {
   min-width: calc(30px * var(--bar-ctrl-scale, 1));
 }
 
+/* Plain text: state is carried by colour alone, no box, border or indicator line. */
 .bar-num {
   min-width: calc(22px * var(--bar-ctrl-scale, 1));
   font-size: calc(6px * var(--bar-ctrl-scale, 1));
   font-weight: 700;
   white-space: nowrap;
-  padding: 1px 3px;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  transition: color 120ms ease;
 }
 
 .bar-num-empty {
@@ -1594,26 +1599,20 @@ input[type='file'] {
 
 .bar-num-has-takes {
   color: var(--accent-2);
-  border-color: rgba(246, 193, 119, 0.4);
-  background: rgba(246, 193, 119, 0.1);
 }
 
 .bar-num-armed {
-  color: #fff;
-  border-color: #e3404b;
-  background: rgba(227, 64, 75, 0.25);
+  color: #e3404b;
 }
 
-.bar-num-paste-ready {
-  color: var(--accent);
-  border-color: rgba(77, 208, 225, 0.45);
-  border-style: dashed;
+.bar-num-recording {
+  color: #e3404b;
 }
 
+.bar-num-playing,
+.bar-num-paste-ready,
 .bar-num-drop-target {
-  color: #041014;
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .bar-drop-target {
@@ -1768,24 +1767,6 @@ input[type='file'] {
 .clipboard-banner-cancel:hover {
   border-color: var(--accent);
   background: rgba(77, 208, 225, 0.16);
-}
-
-.bar-status-strip {
-  width: 100%;
-  height: 1.5px;
-  border-radius: 1px;
-  background: rgba(148, 156, 166, 0.18);
-  transition: background-color 120ms ease, box-shadow 120ms ease;
-}
-
-.bar-status-playing {
-  background: var(--accent);
-  box-shadow: 0 0 4px rgba(77, 208, 225, 0.75);
-}
-
-.bar-status-recording {
-  background: #e3404b;
-  box-shadow: 0 0 4.5px rgba(227, 64, 75, 0.9);
 }
 
 .bar-wave-thumb {
@@ -2273,38 +2254,59 @@ input[type='file'] {
 
 /* Touch screens get the tallest rows regardless of the manual zoom step. */
 @media (max-width: 768px) {
+  /* Each zoom step must resolve to different values here or the -/+ buttons change state
+   with nothing to show for it. Rows are two-line cards on mobile, so the waveform height
+   carries the zoom rather than --bar-row-height. */
   .bar-list,
-  .bar-list.bar-scale-1x,
-  .bar-list.bar-scale-2x,
-  .bar-list.bar-scale-4x {
-    --bar-row-height: 60px;
-    /* Bumped so every control in a bar row is a usable thumb target. */
-    --bar-ctrl-scale: 2;
+  .bar-list.bar-scale-1x {
+    --bar-row-height: auto;
+    --bar-wave-height: 26px;
+    --bar-ctrl-scale: 1.8;
   }
 
+  .bar-list.bar-scale-2x {
+    --bar-row-height: auto;
+    --bar-wave-height: 40px;
+    --bar-ctrl-scale: 2.2;
+  }
+
+  .bar-list.bar-scale-4x {
+    --bar-row-height: auto;
+    --bar-wave-height: 62px;
+    --bar-ctrl-scale: 2.7;
+  }
+
+  /* All five controls stay inline; they shrink rather than wrap. */
   .bar-scale-controls {
     position: static;
     display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 6px;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
     width: 100%;
     margin-bottom: 6px;
   }
 
   .bar-scale-controls button {
     min-height: 26px;
-    padding: 5px 9px;
-    font-size: 9px;
+    padding: 5px 6px;
+    font-size: clamp(0.4rem, 1.9vw, 0.6rem);
+    white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .bar-scale-button {
+    flex: 0 0 auto;
     min-width: 26px;
     font-size: 12px;
   }
 
   .bar-scale-label {
-    font-size: 9px;
+    flex: 0 0 auto;
+    font-size: clamp(0.4rem, 1.9vw, 0.6rem);
+    white-space: nowrap;
   }
 
   .bar-header-divider {
@@ -2488,24 +2490,75 @@ input[type='file'] {
     flex-wrap: wrap;
     height: auto;
     min-height: 0;
-    gap: 6px;
-    padding: 7px 6px;
+    gap: 4px;
+    padding: 6px 4px;
   }
 
-  /* Forced onto its own line: bar number, takes, Ø, swap, star, delete. */
+  /* Its own line, but never wrapped internally — everything shrinks to fit instead so
+     the star and delete stay inside the card's right edge. */
   .bar-controls-left {
     flex: 1 0 100%;
+    flex-wrap: nowrap;
     justify-content: space-between;
-    gap: 6px;
+    gap: 3px;
+    min-width: 0;
   }
 
+  .bar-meta {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .bar-num {
+    min-width: 0;
+  }
+
+  .bar-wave-thumb {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-right: 0;
+  }
+
+  .take-slots {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  /* Fixed scaled widths are what pushed the row past the card; let the pads share the
+     available space instead, keeping their scaled height. */
+  .take-pad {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    max-width: calc(13px * var(--bar-ctrl-scale, 1));
+    padding: 0;
+  }
+
+  .bar-take-actions {
+    flex: 0 0 auto;
+    gap: 2px;
+  }
+
+  .bar-take-actions button {
+    padding: 2px;
+  }
+
+  .bar-fav-button,
+  .bar-delete-button,
+  .bar-transfer-button {
+    min-width: calc(11px * var(--bar-ctrl-scale, 1));
+  }
+
+  /* Driven by the zoom step so -/+ visibly resize the waveform. */
   .bar-gains {
     flex: 1 1 auto;
-    height: 34px;
+    height: var(--bar-wave-height, 34px);
   }
 
   .bar-gain-row {
-    height: 34px;
+    height: var(--bar-wave-height, 34px);
   }
 
   .bar-loop-segment {

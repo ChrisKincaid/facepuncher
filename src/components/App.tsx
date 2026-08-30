@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
 import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { Mixer } from './Mixer'
@@ -214,12 +214,10 @@ export default function App() {
   }
 
   const upperSectionsOpen = showVolume || showSetup || showProject
-  const focusScrollAnchorRef = useRef<{ id: string; top: number } | null>(null)
-  const pendingFocusBarRef = useRef<number | null>(null)
   const stickyHeaderRef = useRef<HTMLDivElement | null>(null)
 
-  // The sticky header overlaps the top of the page, so both the snap offset and the
-  // scroll target have to account for its live height.
+  // The sticky header overlaps the top of the page, so the snap offset has to account
+  // for its live height.
   useEffect(() => {
     const header = stickyHeaderRef.current
     if (!header) return
@@ -232,50 +230,9 @@ export default function App() {
     return () => observer.disconnect()
   }, [])
 
-  const scrollBarToTop = (barIndex: number) => {
-    const row = document.getElementById(`bar-row-${barIndex}`)
-    if (!row) return
-    const headerHeight = stickyHeaderRef.current?.getBoundingClientRect().height ?? 0
-    const top = window.scrollY + row.getBoundingClientRect().top - headerHeight
-    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  const scrollBarsToTop = () => {
+    document.querySelector<HTMLElement>('.bar-list')?.scrollTo({ top: 0, behavior: 'smooth' })
   }
-
-  // Collapsing the sections above the bar list changes the document height, which would
-  // otherwise slide a different bar under the user's eyes. Record which bar row is
-  // nearest the viewport centre and where it sits, so it can be put back afterwards.
-  const captureFocusScrollAnchor = () => {
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('.bar-row'))
-    if (!rows.length) { focusScrollAnchorRef.current = null; return }
-    const viewportCentre = window.innerHeight / 2
-    let closest = rows[0]
-    let closestDistance = Infinity
-    for (const row of rows) {
-      const rect = row.getBoundingClientRect()
-      const distance = Math.abs(rect.top + rect.height / 2 - viewportCentre)
-      if (distance < closestDistance) { closestDistance = distance; closest = row }
-    }
-    focusScrollAnchorRef.current = { id: closest.id, top: closest.getBoundingClientRect().top }
-  }
-
-  // Runs before paint so the correction is never visible as a jump.
-  useLayoutEffect(() => {
-    // Entering BARS ONLY deliberately re-frames the view on the loop start instead of
-    // holding the previous position, so that intent wins over anchor restoration.
-    const targetBar = pendingFocusBarRef.current
-    if (targetBar !== null) {
-      pendingFocusBarRef.current = null
-      focusScrollAnchorRef.current = null
-      scrollBarToTop(targetBar)
-      return
-    }
-    const anchor = focusScrollAnchorRef.current
-    if (!anchor) return
-    focusScrollAnchorRef.current = null
-    const row = document.getElementById(anchor.id)
-    if (!row) return
-    const drift = row.getBoundingClientRect().top - anchor.top
-    if (drift) window.scrollBy(0, drift)
-  }, [upperSectionsOpen])
 
   const [showWaveform, setShowWaveform] = useState(true)
   // Firefox's AudioWorklet delivers empty input on some render quanta during sustained loud
@@ -2131,12 +2088,10 @@ export default function App() {
             onShowHelp={() => setHelpTopic('bars')}
             onToggleFocus={() => {
               const next = !upperSectionsOpen
-              // next === false means the sections collapse, i.e. BARS ONLY turns on.
-              if (!next) pendingFocusBarRef.current = loopEnabled && loopRange ? loopRange.start : 0
-              else captureFocusScrollAnchor()
               setShowVolume(next)
               setShowSetup(next)
               setShowProject(next)
+              scrollBarsToTop()
             }}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}

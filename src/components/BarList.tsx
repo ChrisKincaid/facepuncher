@@ -179,15 +179,30 @@ export function BarList({
           const armedHere = (armedTakeByBar[bar.index] ?? []).length > 0
           const canPasteHere = Boolean(clipboardTake) && !barFull
           const isDropTarget = dropTargetBar === bar.index
-          const headerState = armedHere
-            ? 'bar-num-armed'
-            : isDropTarget
-              ? 'bar-num-drop-target'
-              : canPasteHere
-                ? 'bar-num-paste-ready'
+          const recordingHere = isRecording && active && bar.index === currentBarIndex
+          // Highest-urgency state wins; the label's colour is the only state indicator.
+          const headerState = recordingHere
+            ? 'bar-num-recording'
+            : active
+              ? 'bar-num-playing'
+              : armedHere
+                ? 'bar-num-armed'
+                : isDropTarget
+                  ? 'bar-num-drop-target'
+                  : canPasteHere
+                    ? 'bar-num-paste-ready'
+                    : barTakes.length
+                      ? 'bar-num-has-takes'
+                      : 'bar-num-empty'
+          const headerTitle = recordingHere
+            ? 'Recording'
+            : active
+              ? 'Playing'
+              : armedHere
+                ? 'Armed to record'
                 : barTakes.length
-                  ? 'bar-num-has-takes'
-                  : 'bar-num-empty'
+                  ? `${barTakes.length} take${barTakes.length > 1 ? 's' : ''}`
+                  : 'No takes'
           return (
             <div
               key={bar.index}
@@ -214,11 +229,7 @@ export function BarList({
               <div className="bar-main-row">
               <div className="bar-controls-left">
               <div className="bar-meta">
-                <div className={`bar-num ${headerState}`}>Bar {bar.index + 1}</div>
-                <div
-                  className={`bar-status-strip ${active ? 'bar-status-playing' : ''} ${isRecording && active && bar.index === currentBarIndex ? 'bar-status-recording' : ''}`}
-                  aria-label={isRecording && active && bar.index === currentBarIndex ? 'Recording' : active ? 'Playing' : 'Bar inactive'}
-                />
+                <div className={`bar-num ${headerState}`} title={headerTitle} aria-label={`Bar ${bar.index + 1} — ${headerTitle}`}>Bar {bar.index + 1}</div>
               </div>
               <div className="bar-wave-thumb">
                 <TakeSlots
