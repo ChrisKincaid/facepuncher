@@ -4,6 +4,21 @@ export type LatencyCalibrationResult =
 
 export type BleedCancelPreset = 'light' | 'standard' | 'heavy'
 
+// Mirror of recorderWorklet.ts as plain JS, used to build the processor from a Blob when
+// the bundled module URL is unavailable. Keep the two in sync if the capture logic changes.
+const RECORDER_WORKLET_SOURCE = `
+class RecorderWorklet extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0]
+    const channelData = input && input.length > 0 ? input[0] : undefined
+    const frame = channelData ? channelData.slice(0) : new Float32Array(128)
+    this.port.postMessage({ frame, startFrame: currentFrame, wasEmptyInput: !channelData }, [frame.buffer])
+    return true
+  }
+}
+registerProcessor('recorder-worklet', RecorderWorklet)
+`
+
 export class AudioEngine {
   // Bleed removal tuning. Over-subtraction compensates for the room spreading the
   // bleed's energy beyond the bins the reference occupies; the spectral floor is the
@@ -31,6 +46,9 @@ export class AudioEngine {
   private micStream?: MediaStream
   private micSource?: MediaStreamAudioSourceNode
   private recorderNode?: AudioWorkletNode
+  private scriptProcessorNode?: ScriptProcessorNode
+  private scriptProcessorFrame = 0
+  private captureNode?: AudioNode
   private recorderSink?: GainNode
   private micCaptureReady = false
   // Continuous PCM capture: one growing buffer for the whole session instead of
@@ -454,44 +472,103 @@ export class AudioEngine {
 
   async prepareRecorder() {
     const ctx = await this.ensureContext()
-    if (!this.recorderNode) {
-      await ctx.audioWorklet.addModule(new URL('./recorderWorklet.ts', import.meta.url))
+    if (this.recorderNode || this.scriptProcessorNode) return this.recorderNode
+
+    if (await this.loadRecorderWorkletModule(ctx)) {
       this.recorderNode = new AudioWorkletNode(ctx, 'recorder-worklet')
       this.recorderNode.port.onmessage = (event) => {
         const message = event.data as { frame?: ArrayBuffer | Float32Array; startFrame?: number; wasEmptyInput?: boolean }
         if (!message.frame || message.startFrame === undefined) return
         const data = message.frame instanceof ArrayBuffer ? new Float32Array(message.frame) : message.frame
-        // The worklet substitutes a zero-filled frame whenever the browser hands it an empty
-        // input (Firefox does this on some render quanta). That's silently faked silence in
-        // the recording, not real signal — track streaks of it to see if it's actually eating
-        // real audio (e.g. during a sustained note) rather than genuine quiet.
-        if (message.wasEmptyInput) {
-          this.emptyInputStreak += 1
-        } else if (this.emptyInputStreak > 0) {
-          console.warn('%c[REC] worklet substituted silence for empty input frames', 'color:#fff;background:#c60;padding:2px 6px', {
-            consecutiveFrames: this.emptyInputStreak,
-            approxDurationMs: Math.round((this.emptyInputStreak * data.length / (this.ctx?.sampleRate ?? 44100)) * 1000),
-            endedAtCaptureFrame: message.startFrame,
-            duringActiveRecording: !!this.activeRecording,
-          })
-          this.emptyInputStreak = 0
-        }
-        this.appendCapturedFrame(data, message.startFrame)
-        if (this.recordingActive && (this.captureLength / data.length) % 50 < 1) {
-          console.log('[Punchin] microphone frames received', {
-            frames: this.captureLength,
-          })
-        }
+        this.handleCapturedFrame(data, message.startFrame, Boolean(message.wasEmptyInput))
       }
-      // The worklet only runs while pulled into the render graph. It has no audible
-      // output of its own, so route it through a zero-gain sink instead of monitoring
-      // the mic live (monitoring was removed separately due to output latency).
+      this.captureNode = this.recorderNode
+    } else {
+      this.setupScriptProcessorCapture(ctx)
+    }
+
+    // The capture node only runs while pulled into the render graph. It has no audible
+    // output of its own, so route it through a zero-gain sink instead of monitoring
+    // the mic live (monitoring was removed separately due to output latency).
+    if (this.captureNode) {
       this.recorderSink = ctx.createGain()
       this.recorderSink.gain.value = 0
-      this.recorderNode.connect(this.recorderSink)
+      this.captureNode.connect(this.recorderSink)
       this.recorderSink.connect(ctx.destination)
     }
     return this.recorderNode
+  }
+
+  /**
+   * Loads the recorder processor, trying the bundled module first and falling back to an
+   * inline Blob. The bundled path resolves during dev but a .ts source is not emitted as
+   * a standalone asset by the production build, so the Blob is what keeps this working
+   * once deployed. Returns false when AudioWorklet is unavailable or both routes fail.
+   */
+  private async loadRecorderWorkletModule(ctx: AudioContext): Promise<boolean> {
+    if (!ctx.audioWorklet) {
+      console.warn('[Punchin] AudioWorklet unsupported — falling back to ScriptProcessor capture')
+      return false
+    }
+    try {
+      await ctx.audioWorklet.addModule(new URL('./recorderWorklet.ts', import.meta.url))
+      return true
+    } catch (err) {
+      console.warn('[Punchin] bundled worklet module failed to load, trying inline blob', err)
+    }
+    let blobUrl: string | undefined
+    try {
+      blobUrl = URL.createObjectURL(new Blob([RECORDER_WORKLET_SOURCE], { type: 'application/javascript' }))
+      await ctx.audioWorklet.addModule(blobUrl)
+      return true
+    } catch (err) {
+      console.error('[Punchin] inline worklet module failed to load', err)
+      return false
+    } finally {
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }
+
+  /**
+   * Last-resort capture path. ScriptProcessor is deprecated and runs on the main thread,
+   * but it keeps recording usable where AudioWorklet cannot load at all. Frame numbering
+   * is advanced locally rather than read from the audio thread, which keeps the capture
+   * timeline gap-free even though it is not sample-exact against ctx.currentTime.
+   */
+  private setupScriptProcessorCapture(ctx: AudioContext) {
+    const bufferSize = 2048
+    const node = ctx.createScriptProcessor(bufferSize, 1, 1)
+    this.scriptProcessorFrame = Math.round(ctx.currentTime * ctx.sampleRate)
+    node.onaudioprocess = (event) => {
+      const channel = event.inputBuffer.getChannelData(0)
+      this.handleCapturedFrame(new Float32Array(channel), this.scriptProcessorFrame, false)
+      this.scriptProcessorFrame += channel.length
+    }
+    this.scriptProcessorNode = node
+    this.captureNode = node
+    console.warn('[Punchin] using ScriptProcessor capture — timing is approximate')
+  }
+
+  private handleCapturedFrame(data: Float32Array, startFrame: number, wasEmptyInput: boolean) {
+    // The worklet substitutes a zero-filled frame whenever the browser hands it an empty
+    // input (Firefox does this on some render quanta). That's silently faked silence in
+    // the recording, not real signal — track streaks of it to see if it's actually eating
+    // real audio (e.g. during a sustained note) rather than genuine quiet.
+    if (wasEmptyInput) {
+      this.emptyInputStreak += 1
+    } else if (this.emptyInputStreak > 0) {
+      console.warn('%c[REC] worklet substituted silence for empty input frames', 'color:#fff;background:#c60;padding:2px 6px', {
+        consecutiveFrames: this.emptyInputStreak,
+        approxDurationMs: Math.round((this.emptyInputStreak * data.length / (this.ctx?.sampleRate ?? 44100)) * 1000),
+        endedAtCaptureFrame: startFrame,
+        duringActiveRecording: !!this.activeRecording,
+      })
+      this.emptyInputStreak = 0
+    }
+    this.appendCapturedFrame(data, startFrame)
+    if (this.recordingActive && (this.captureLength / data.length) % 50 < 1) {
+      console.log('[Punchin] microphone frames received', { frames: this.captureLength })
+    }
   }
 
   private appendCapturedFrame(data: Float32Array, startFrame: number) {
@@ -599,8 +676,8 @@ export class AudioEngine {
   async ensureMicCapture() {
     await this.prepareMicrophone()
     await this.prepareRecorder()
-    if (!this.micCaptureReady && this.micSource && this.recorderNode) {
-      this.micSource.connect(this.recorderNode)
+    if (!this.micCaptureReady && this.micSource && this.captureNode) {
+      this.micSource.connect(this.captureNode)
       this.micCaptureReady = true
     }
   }
