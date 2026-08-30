@@ -1937,7 +1937,6 @@ export default function App() {
               </div>
 
               <div className="beat-setup-group beat-setup-dsp-group">
-                <span className="beat-setup-group-label">Bleed</span>
                 <button
                   type="button"
                   className={`beat-setup-bleed-cancel ${bleedCancelEnabled ? 'loop-toggle-on' : 'secondary'}`}

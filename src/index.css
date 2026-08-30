@@ -2221,6 +2221,56 @@ input[type='file'] {
   display: none;
 }
 
+/* Desktop-only Beat Setup proportions; the mobile block below re-stacks all of this. */
+@media (min-width: 769px) {
+  /* Equal-height clusters, all on one row. nowrap matters: the Bleed group grows to fill
+     the remainder, and with the inherited flex-wrap that growth would push it to a new line. */
+  .beat-setup-panel .controls {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+
+  .beat-setup-panel .controls > * {
+    align-self: stretch;
+    min-width: 0;
+  }
+
+  .beat-setup-actions button,
+  .beat-setup-group button,
+  .beat-setup-group .bleed-preset-group {
+    align-self: stretch;
+  }
+
+  /* Takes the leftover width, then hands it to its two children so neither the toggle
+     nor the preset segments leave dead space at the right edge. */
+  .beat-setup-dsp-group {
+    flex: 1 1 auto;
+    gap: 8px;
+  }
+
+  .beat-setup-dsp-group .beat-setup-bleed-cancel,
+  .beat-setup-dsp-group .bleed-preset-group {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .beat-setup-dsp-group .bleed-preset-button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .beat-setup-sync,
+  .playback-sync-controls {
+    width: 100%;
+  }
+
+  /* The step buttons absorb the remaining space rather than clustering at the left. */
+  .playback-sync-buttons {
+    flex: 1 1 auto;
+  }
+}
+
 /* Touch screens get the tallest rows regardless of the manual zoom step. */
 @media (max-width: 768px) {
   .bar-list,
@@ -2278,14 +2328,99 @@ input[type='file'] {
   .playback-sync-buttons,
   .beat-setup-group,
   .beat-setup-actions,
-  .bleed-preset-group,
-  .project-export-grid {
+  .bleed-preset-group {
     flex-wrap: wrap;
+    justify-content: center;
+    max-width: 100%;
+  }
+
+  /* The 2x2 quadrant grid becomes one full-width column. */
+  .project-export-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .project-quadrant {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 12px;
+  }
+
+  /* Beat Setup stacks its rows instead of laying them out side by side. */
+  .beat-setup-panel,
+  .beat-setup-sync {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .beat-setup-panel > *,
+  .beat-setup-sync > * {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  /* Every Beat Setup cluster spans the panel so their edges line up with each other. */
+  .beat-setup-panel .controls,
+  .beat-setup-group,
+  .beat-setup-actions,
+  .bleed-preset-group,
+  .playback-sync-controls,
+  .playback-sync-buttons,
+  .calibrate-mic-button {
+    width: 100%;
+  }
+
+  .beat-setup-actions button,
+  .beat-setup-group .bleed-preset-button {
+    flex: 1 1 0;
+  }
+
+  .beat-setup-bleed-cancel {
+    flex: 1 1 100%;
+  }
+
+  .calibrate-mic-button {
+    order: -1;
+    text-align: center;
     justify-content: center;
   }
 
-  .project-export-grid {
-    display: flex;
+  .playback-sync-buttons button {
+    flex: 1 1 60px;
+  }
+
+  /* Reset is a sibling of the nudge steps in the DOM; ordering it last and forcing a
+     full basis gives it its own row without changing the desktop markup. */
+  .playback-sync-reset {
+    order: 99;
+    flex: 1 0 100%;
+  }
+
+  .playback-sync-buttons .playback-sync-divider:last-of-type {
+    display: none;
+  }
+
+  /* Base CSS pins these to nowrap for the desktop grid; the labelled slider and the
+     nudge chain both need to break onto their own lines here. */
+  .playback-sync-controls > .flex-gap {
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+    white-space: normal;
+  }
+
+  .playback-sync-controls input[type='range'],
+  .beat-setup-metronome-volume {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: 180px;
   }
 
   .controls button,
