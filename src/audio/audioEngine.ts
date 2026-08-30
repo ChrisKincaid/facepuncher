@@ -69,6 +69,13 @@ export class AudioEngine {
     return this.ctx?.state ?? 'not-created'
   }
 
+  /** No-op until a context exists, so calling this before any gesture cannot create one. */
+  async resumeIfSuspended() {
+    if (this.ctx?.state === 'suspended') {
+      try { await this.ctx.resume() } catch (err) { console.warn('[Punchin] AudioContext resume failed', err) }
+    }
+  }
+
   async ensureContext() {
     if (!this.ctx) {
       this.ctx = new AudioContext({ latencyHint: 'interactive' })

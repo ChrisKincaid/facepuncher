@@ -332,14 +332,29 @@ export default function App() {
     saveProject(project).catch((err) => console.error('autosave failed', err))
   }, [project])
 
+  // Browsers block an AudioContext created before a user gesture, so nothing audio-related
+  // is started at mount. The first tap/key both resumes the context and does the one-time
+  // microphone setup; the resume stays attached because a context can suspend again later.
   useEffect(() => {
     console.log('[Punchin] recording diagnostics loaded')
-    void audioEngine.prepareMicrophone()
-      .then(() => setStatus('Microphone ready. Load audio to begin.'))
-      .catch((err) => {
-        console.error('microphone access on load failed', err)
-        setStatus('Microphone unavailable. Check browser permissions before recording.')
-      })
+    let micPrepared = false
+    const onGesture = () => {
+      void audioEngine.resumeIfSuspended()
+      if (micPrepared) return
+      micPrepared = true
+      void audioEngine.prepareMicrophone()
+        .then(() => setStatus('Microphone ready. Load audio to begin.'))
+        .catch((err) => {
+          console.error('microphone access failed', err)
+          setStatus('Microphone unavailable. Check browser permissions before recording.')
+        })
+    }
+    window.addEventListener('pointerdown', onGesture)
+    window.addEventListener('keydown', onGesture)
+    return () => {
+      window.removeEventListener('pointerdown', onGesture)
+      window.removeEventListener('keydown', onGesture)
+    }
   }, [])
 
   // Drive the visible cursor from the same AudioContext clock used by the
@@ -647,6 +662,7 @@ export default function App() {
 
   const handlePlay = useCallback(() => {
     if (!audioLoaded) return
+    void audioEngine.resumeIfSuspended()
     console.log('[Punchin] top-level Play clicked', { contextState: audioEngine.contextState, position: playhead, isPlaying: isPlayingRef.current })
     chainedThroughBarRef.current = -1
     const selectedLoop = loopEnabled && loopRange

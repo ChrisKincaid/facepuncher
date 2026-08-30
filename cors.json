@@ -3,6 +3,8 @@
     "origin": [
       "http://localhost:4200",
       "http://localhost:5173",
+      "https://punchrap-boxbap.web.app",
+      "https://punchrap-boxbap.firebaseapp.com",
       "https://boombapboombox-a5b78.web.app",
       "https://boombapboombox-a5b78.firebaseapp.com"
     ],

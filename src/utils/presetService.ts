@@ -17,40 +17,49 @@ function stripExtension(name: string) {
   return name.replace(/\.fist$/i, '')
 }
 
-/** Lists the preset .fist files available in Firebase Storage. */
+/**
+ * Lists the preset .fist files available in Firebase Storage.
+ *
+ * Never rejects: a CORS block, missing config, or offline device resolves to an empty
+ * list so the app still finishes initialising with the local/custom-beat flow intact.
+ */
 export async function fetchFistPresets(): Promise<FistPreset[]> {
-  for (const folder of PRESETS_FOLDERS) {
-    let listing
-    try {
-      listing = await listAll(ref(storage, folder))
-    } catch (err) {
-      console.error(`Preset list fetch failed for folder "${folder}":`, err)
-      continue
-    }
-    const fistItems = listing.items.filter((item) => /\.fist$/i.test(item.name))
-    if (!fistItems.length) continue
+  try {
+    for (const folder of PRESETS_FOLDERS) {
+      let listing
+      try {
+        listing = await listAll(ref(storage, folder))
+      } catch (err) {
+        console.error(`Preset list fetch failed for folder "${folder}":`, err)
+        continue
+      }
+      const fistItems = listing.items.filter((item) => /\.fist$/i.test(item.name))
+      if (!fistItems.length) continue
 
-    console.log(`Raw Preset Files (${folder || 'root'}):`, fistItems.map((item) => item.fullPath))
-    const presets = await Promise.all(
-      fistItems.map(async (item): Promise<FistPreset | null> => {
-        try {
-          const [fileUrl, metadata] = await Promise.all([getDownloadURL(item), getMetadata(item)])
-          return {
-            id: item.fullPath,
-            path: item.fullPath,
-            title: stripExtension(item.name),
-            fileUrl,
-            uploadDate: metadata.timeCreated,
+      console.log(`Raw Preset Files (${folder || 'root'}):`, fistItems.map((item) => item.fullPath))
+      const presets = await Promise.all(
+        fistItems.map(async (item): Promise<FistPreset | null> => {
+          try {
+            const [fileUrl, metadata] = await Promise.all([getDownloadURL(item), getMetadata(item)])
+            return {
+              id: item.fullPath,
+              path: item.fullPath,
+              title: stripExtension(item.name),
+              fileUrl,
+              uploadDate: metadata.timeCreated,
+            }
+          } catch (err) {
+            console.error(`Could not read preset "${item.fullPath}":`, err)
+            return null
           }
-        } catch (err) {
-          console.error(`Could not read preset "${item.fullPath}":`, err)
-          return null
-        }
-      }),
-    )
-    const usable = presets.filter((p): p is FistPreset => p !== null)
-    usable.sort((a, b) => (b.uploadDate ?? '').localeCompare(a.uploadDate ?? ''))
-    return usable
+        }),
+      )
+      const usable = presets.filter((p): p is FistPreset => p !== null)
+      usable.sort((a, b) => (b.uploadDate ?? '').localeCompare(a.uploadDate ?? ''))
+      return usable
+    }
+  } catch (err) {
+    console.error('Preset service unavailable — continuing without presets:', err)
   }
   return []
 }
