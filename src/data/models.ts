@@ -32,6 +32,7 @@ export interface Take {
   gain: number
   selected: boolean
   locked?: boolean
+  bleedCancelled?: boolean
   createdAt: string
 }
 

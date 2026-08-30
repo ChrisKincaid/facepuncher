@@ -128,6 +128,7 @@ function coerceProject(raw: unknown): Project {
         gain: typeof take.gain === 'number' ? take.gain : 1,
         selected: Boolean(take.selected),
         locked: Boolean(take.locked),
+        bleedCancelled: Boolean(take.bleedCancelled),
         createdAt: typeof take.createdAt === 'string' ? take.createdAt : new Date().toISOString(),
       })),
     mix: {

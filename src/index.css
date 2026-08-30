@@ -165,6 +165,15 @@ body {
   width: 50px;
 }
 
+.beat-setup-bleed-cancel {
+  flex: 0 0 auto;
+  min-width: 68px;
+  min-height: 16px;
+  padding: 2px 6px;
+  font-size: 5.5px;
+  white-space: nowrap;
+}
+
 /* Pinned to the far right of the Beat Setup row, Set Bar 1 outermost. */
 .beat-setup-actions {
   display: flex;
@@ -1528,6 +1537,21 @@ input[type='file'] {
 /* Stacked above the undo toast so both can be on screen at once. */
 .project-toast {
   bottom: 33px;
+}
+
+/* Actionable warning that has to be readable over the busy bar lanes behind it, so it
+   breaks from the usual toast scale rather than matching the 6px UI type. */
+.project-toast-alert {
+  max-width: min(480px, 90vw);
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+  color: #fff;
+  background: #23252f;
+  border: 1px solid var(--accent-2);
+  border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7);
 }
 
 .calibrate-mic-button {

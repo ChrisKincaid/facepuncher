@@ -29,7 +29,7 @@ interface StoreState extends UIState {
   consumeArmedTake: (barIndex: number) => void
   setLatencyOffset: (ms: number) => void
   addTake: (barIndex: number, fileId: string, gain: number) => { ok: boolean; reason?: string; take?: Take }
-  saveTake: (barIndex: number, slot: number, fileId: string, gain: number) => { ok: boolean; reason?: string; take?: Take }
+  saveTake: (barIndex: number, slot: number, fileId: string, gain: number, bleedCancelled?: boolean) => { ok: boolean; reason?: string; take?: Take }
   selectTake: (barIndex: number, takeId: string) => void
   clearTakeSelection: (barIndex: number) => void
   deleteTake: (takeId: string) => void
@@ -174,7 +174,7 @@ export const useStore = create<StoreState>((set, get) => ({
     return { ok: true, take }
   },
 
-  saveTake(barIndex, slot, fileId, gain) {
+  saveTake(barIndex, slot, fileId, gain, bleedCancelled) {
     const state = get()
     const current = state.project.takes.filter((take) => take.barIndex === barIndex)
     if (slot < 0 || slot > 4 || slot > current.length) return { ok: false, reason: 'invalid-slot' }
@@ -187,6 +187,7 @@ export const useStore = create<StoreState>((set, get) => ({
       gain,
       selected: true,
       locked: existing?.locked,
+      bleedCancelled,
       createdAt: new Date().toISOString(),
     }
     const barTakes = current.map((item, index) => index === slot ? take : item)

@@ -3,6 +3,13 @@ export type LatencyCalibrationResult =
   | { status: 'no-signal'; peak: number }
 
 export class AudioEngine {
+  // Bleed removal tuning. Over-subtraction compensates for the room spreading the
+  // bleed's energy beyond the bins the reference occupies; the floor is the fraction of
+  // the original magnitude a bin may never fall below, which trades depth of removal
+  // against the warbling "musical noise" that hard-zeroed bins produce.
+  private static readonly BLEED_OVERSUBTRACTION = 2.5
+  private static readonly BLEED_SPECTRAL_FLOOR = 0.01
+
   private ctx?: AudioContext
   private beatBuffer?: AudioBuffer
   private beatGain?: GainNode
@@ -947,6 +954,340 @@ export class AudioEngine {
     while (onsetIndex > searchFrom && Math.abs(samples[onsetIndex - 1]) > footThreshold) onsetIndex--
 
     return { delayMs: Math.round((onsetIndex / sampleRate) * 1000), peak: peakValue }
+  }
+
+  /**
+   * Removes speaker bleed from an open-air vocal take by spectral subtraction: the
+   * backing track's magnitude spectrum is scaled and subtracted from the mic's, bin by
+   * bin, while the mic's own phase is kept. Unlike sample-level phase inversion this
+   * tolerates the sub-sample misalignment and room colouring that make a live room's
+   * bleed impossible to cancel by direct subtraction.
+   *
+   * barStartSec is the take's transport position and latencyOffsetMs is the calibrated
+   * round-trip figure (negative, as produced by runLatencyCalibration), which together
+   * give the coarse alignment; correlation then refines it. The subtraction is scaled to
+   * the level the bleed actually arrived at, since that depends on speaker volume.
+   *
+   * Returns null only when subtraction is structurally impossible (no backing track, or
+   * a sample rate that cannot be aligned). Weak correlation is not a failure — it falls
+   * back to the calibrated offset with an amplitude-matched scale.
+   */
+  cancelSpeakerBleed(vocalBuffer: AudioBuffer, barStartSec: number, latencyOffsetMs: number): AudioBuffer | null {
+    if (!this.ctx) return null
+    if (!this.beatBuffer) {
+      console.warn('%c[BLEED] no backing track loaded — nothing to subtract', 'color:#fff;background:#c00;padding:2px 6px')
+      return null
+    }
+    const sampleRate = vocalBuffer.sampleRate
+    if (this.beatBuffer.sampleRate !== sampleRate) {
+      console.warn('%c[BLEED] sample rate mismatch — cannot align reference', 'color:#fff;background:#c00;padding:2px 6px', {
+        beatRate: this.beatBuffer.sampleRate, vocalRate: sampleRate,
+      })
+      return null
+    }
+
+    const vocal = vocalBuffer.getChannelData(0)
+    const beat = this.mixBeatToMono(this.beatBuffer)
+    const roundTripSec = Math.max(0, -latencyOffsetMs / 1000)
+    // Bleed heard at take-time t was emitted by the speaker one round trip earlier.
+    const baseBeatOffset = Math.round((barStartSec - roundTripSec) * sampleRate)
+
+    const searchRadius = Math.round(0.02 * sampleRate)
+    const best = this.findBleedAlignment(vocal, beat, baseBeatOffset, searchRadius)
+    // A poor correlation only means the search could not improve on the calibration, so
+    // fall back to the calibrated offset verbatim instead of giving up on the take.
+    const lag = best?.lag ?? 0
+    const offset = baseBeatOffset + lag
+
+    // Gain, in order of preference: fitted on bleed-dominated windows, then the
+    // whole-take least-squares fit, then a plain amplitude match on the quietest
+    // windows — the last needs no correlation at all, so it survives a live room.
+    const MIN_USABLE_GAIN = 0.002
+    const silenceGain = this.estimateBleedGainFromSilence(vocal, beat, offset, sampleRate)
+    let alpha: number
+    let gainSource: string
+    if (silenceGain !== null && silenceGain >= MIN_USABLE_GAIN) {
+      alpha = silenceGain
+      gainSource = 'silence-correlated'
+    } else if (best && best.alpha >= MIN_USABLE_GAIN) {
+      alpha = best.alpha
+      gainSource = 'whole-take-fit'
+    } else {
+      const rmsGain = this.estimateBleedGainByRms(vocal, beat, offset, sampleRate)
+      alpha = rmsGain ?? 0
+      gainSource = rmsGain !== null ? 'rms-amplitude-match' : 'none'
+    }
+
+    const output = this.ctx.createBuffer(1, vocalBuffer.length, sampleRate)
+    const cleaned = output.getChannelData(0)
+    cleaned.set(this.spectralSubtract(vocal, beat, offset, alpha))
+
+    const rawStats = this.measureLevel(vocal)
+    const referenceStats = this.measureLevel(vocal, (i) => {
+      const beatIndex = offset + i
+      const scale = alpha * AudioEngine.BLEED_OVERSUBTRACTION
+      return scale * (beatIndex >= 0 && beatIndex < beat.length ? beat[beatIndex] : 0)
+    })
+    const cleanedStats = this.measureLevel(cleaned)
+    console.log('%c[BLEED] spectral subtraction applied', 'color:#fff;background:#063;padding:2px 6px', {
+      barStartSec,
+      latencyOffsetMs,
+      alignmentOffsetSamples: offset,
+      lagFromCalibrationSamples: lag,
+      lagFromCalibrationMs: +((lag / sampleRate) * 1000).toFixed(2),
+      alignmentSource: best ? 'correlation-refined' : 'calibrated-offset-only',
+      gainSource,
+      alpha: +alpha.toFixed(4),
+      overSubtractionFactor: AudioEngine.BLEED_OVERSUBTRACTION,
+      effectiveSubtractionGain: +(alpha * AudioEngine.BLEED_OVERSUBTRACTION).toFixed(4),
+      spectralFloor: AudioEngine.BLEED_SPECTRAL_FLOOR,
+      silenceGain: silenceGain === null ? null : +silenceGain.toFixed(4),
+      wholeTakeFitGain: best ? +best.alpha.toFixed(4) : null,
+      rawPeak: +rawStats.peak.toFixed(4),
+      rawRms: +rawStats.rms.toFixed(4),
+      scaledReferencePeak: +referenceStats.peak.toFixed(4),
+      scaledReferenceRms: +referenceStats.rms.toFixed(4),
+      cleanedPeak: +cleanedStats.peak.toFixed(4),
+      cleanedRms: +cleanedStats.rms.toFixed(4),
+      rmsReductionDb: +(20 * Math.log10((cleanedStats.rms || 1e-9) / (rawStats.rms || 1e-9))).toFixed(2),
+    })
+    return output
+  }
+
+  private measureLevel(source: Float32Array, transform?: (index: number) => number) {
+    let peak = 0
+    let sum = 0
+    for (let i = 0; i < source.length; i++) {
+      const value = transform ? transform(i) : source[i]
+      const abs = Math.abs(value)
+      if (abs > peak) peak = abs
+      sum += value * value
+    }
+    return { peak, rms: Math.sqrt(sum / Math.max(1, source.length)) }
+  }
+
+  /**
+   * STFT -> per-bin magnitude subtraction -> ISTFT.
+   *
+   * Each frame's mic spectrum is scaled down toward the residual magnitude rather than
+   * having a complex value subtracted from it, so the mic's original phase survives
+   * untouched. The measured bleed gain is multiplied by an over-subtraction factor
+   * because the room smears energy across neighbouring bins — removing only the
+   * measured magnitude reliably leaves audible residue.
+   */
+  private spectralSubtract(vocal: Float32Array, beat: Float32Array, offset: number, alpha: number): Float32Array {
+    const N = 2048
+    const hop = N / 4
+    const subtractionGain = alpha * AudioEngine.BLEED_OVERSUBTRACTION
+    const window = new Float32Array(N)
+    for (let i = 0; i < N; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N)
+
+    const length = vocal.length
+    const out = new Float32Array(length)
+    const normalisation = new Float32Array(length)
+    const vocalRe = new Float32Array(N)
+    const vocalIm = new Float32Array(N)
+    const beatRe = new Float32Array(N)
+    const beatIm = new Float32Array(N)
+
+    for (let start = 0; start < length; start += hop) {
+      for (let i = 0; i < N; i++) {
+        const vocalIndex = start + i
+        vocalRe[i] = vocalIndex < length ? vocal[vocalIndex] * window[i] : 0
+        vocalIm[i] = 0
+        const beatIndex = offset + start + i
+        beatRe[i] = beatIndex >= 0 && beatIndex < beat.length ? beat[beatIndex] * window[i] : 0
+        beatIm[i] = 0
+      }
+      this.fft(vocalRe, vocalIm, false)
+      this.fft(beatRe, beatIm, false)
+
+      for (let k = 0; k < N; k++) {
+        const magnitude = Math.hypot(vocalRe[k], vocalIm[k])
+        if (magnitude < 1e-12) continue
+        const bleedMagnitude = Math.hypot(beatRe[k], beatIm[k])
+        const residual = Math.max(magnitude - subtractionGain * bleedMagnitude, magnitude * AudioEngine.BLEED_SPECTRAL_FLOOR)
+        // Scaling the complex pair preserves its argument, i.e. the mic's phase.
+        const scale = residual / magnitude
+        vocalRe[k] *= scale
+        vocalIm[k] *= scale
+      }
+
+      this.fft(vocalRe, vocalIm, true)
+      for (let i = 0; i < N; i++) {
+        const outIndex = start + i
+        if (outIndex >= length) break
+        out[outIndex] += vocalRe[i] * window[i]
+        normalisation[outIndex] += window[i] * window[i]
+      }
+    }
+
+    // Dividing by the accumulated squared window makes overlap-add exact for any
+    // hop size, rather than relying on a hand-tuned constant.
+    for (let i = 0; i < length; i++) {
+      if (normalisation[i] > 1e-8) out[i] /= normalisation[i]
+    }
+    return out
+  }
+
+  // In-place iterative radix-2 Cooley-Tukey. Length must be a power of two.
+  private fft(re: Float32Array, im: Float32Array, inverse: boolean) {
+    const n = re.length
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1
+      for (; j & bit; bit >>= 1) j ^= bit
+      j ^= bit
+      if (i < j) {
+        const tempRe = re[i]; re[i] = re[j]; re[j] = tempRe
+        const tempIm = im[i]; im[i] = im[j]; im[j] = tempIm
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const angle = ((inverse ? 2 : -2) * Math.PI) / len
+      const stepRe = Math.cos(angle)
+      const stepIm = Math.sin(angle)
+      const half = len >> 1
+      for (let i = 0; i < n; i += len) {
+        let twiddleRe = 1
+        let twiddleIm = 0
+        for (let k = 0; k < half; k++) {
+          const evenRe = re[i + k]
+          const evenIm = im[i + k]
+          const oddRe = re[i + k + half] * twiddleRe - im[i + k + half] * twiddleIm
+          const oddIm = re[i + k + half] * twiddleIm + im[i + k + half] * twiddleRe
+          re[i + k] = evenRe + oddRe
+          im[i + k] = evenIm + oddIm
+          re[i + k + half] = evenRe - oddRe
+          im[i + k + half] = evenIm - oddIm
+          const nextRe = twiddleRe * stepRe - twiddleIm * stepIm
+          twiddleIm = twiddleRe * stepIm + twiddleIm * stepRe
+          twiddleRe = nextRe
+        }
+      }
+    }
+    if (inverse) {
+      for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n }
+    }
+  }
+
+  /**
+   * Scales the reference to the bleed's actual amplitude by fitting only on stretches
+   * where the beat dominates the take — i.e. where the singer is not on the mic.
+   *
+   * Those windows are identified by correlation coefficient rather than by raw quietness:
+   * a bleed-only window can still be loud, so a plain "find the quiet part" test would
+   * miss it. Median of the qualifying windows keeps one odd window from skewing the gain.
+   */
+  private estimateBleedGainFromSilence(vocal: Float32Array, beat: Float32Array, offset: number, sampleRate: number): number | null {
+    const windowSize = Math.round(0.05 * sampleRate)
+    if (windowSize <= 0) return null
+    const gains: number[] = []
+    for (let start = 0; start + windowSize <= vocal.length; start += windowSize) {
+      let dot = 0
+      let beatEnergy = 0
+      let vocalEnergy = 0
+      for (let i = start; i < start + windowSize; i++) {
+        const beatIndex = offset + i
+        if (beatIndex < 0 || beatIndex >= beat.length) continue
+        const b = beat[beatIndex]
+        const v = vocal[i]
+        dot += v * b
+        beatEnergy += b * b
+        vocalEnergy += v * v
+      }
+      if (beatEnergy <= 1e-9 || vocalEnergy <= 1e-9) continue
+      const correlation = dot / Math.sqrt(beatEnergy * vocalEnergy)
+      // Deliberately permissive: a real room smears the bleed with reflections, so
+      // correlation on a genuinely bleed-only window is routinely well under 0.5.
+      if (correlation < 0.2) continue
+      gains.push(dot / beatEnergy)
+    }
+    if (!gains.length) return null
+    gains.sort((a, b) => a - b)
+    const median = gains[Math.floor(gains.length / 2)]
+    return Math.max(0, Math.min(1.5, median))
+  }
+
+  /**
+   * Last-resort gain estimate that ignores phase entirely and just matches amplitude.
+   *
+   * Takes the quietest quarter of the vocal's windows — the stretches most likely to be
+   * bleed with no singing over them — and compares their level to the reference's level
+   * at the same spot. Works in rooms where reflections destroy correlation, at the cost
+   * of being an amplitude match rather than a true phase fit.
+   */
+  private estimateBleedGainByRms(vocal: Float32Array, beat: Float32Array, offset: number, sampleRate: number): number | null {
+    const windowSize = Math.round(0.05 * sampleRate)
+    if (windowSize <= 0) return null
+    const windows: { vocalRms: number; beatRms: number }[] = []
+    for (let start = 0; start + windowSize <= vocal.length; start += windowSize) {
+      let vocalEnergy = 0
+      let beatEnergy = 0
+      for (let i = start; i < start + windowSize; i++) {
+        const beatIndex = offset + i
+        vocalEnergy += vocal[i] * vocal[i]
+        if (beatIndex >= 0 && beatIndex < beat.length) beatEnergy += beat[beatIndex] * beat[beatIndex]
+      }
+      const beatRms = Math.sqrt(beatEnergy / windowSize)
+      if (beatRms <= 1e-6) continue
+      windows.push({ vocalRms: Math.sqrt(vocalEnergy / windowSize), beatRms })
+    }
+    if (!windows.length) return null
+    windows.sort((a, b) => a.vocalRms - b.vocalRms)
+    const quietCount = Math.max(1, Math.floor(windows.length / 4))
+    const ratios = windows.slice(0, quietCount).map((w) => w.vocalRms / w.beatRms).sort((a, b) => a - b)
+    return Math.max(0, Math.min(1.5, ratios[Math.floor(ratios.length / 2)]))
+  }
+
+  private mixBeatToMono(buffer: AudioBuffer): Float32Array {
+    if (buffer.numberOfChannels === 1) return buffer.getChannelData(0)
+    const mono = new Float32Array(buffer.length)
+    for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+      const data = buffer.getChannelData(channel)
+      for (let i = 0; i < mono.length; i++) mono[i] += data[i]
+    }
+    for (let i = 0; i < mono.length; i++) mono[i] /= buffer.numberOfChannels
+    return mono
+  }
+
+  // Two-pass lag search (coarse decimated sweep, then sample-accurate refinement) so a
+  // ±20ms window doesn't cost a full correlation at every offset. Returns the lag plus
+  // the least-squares scale factor for the bleed at that lag.
+  private findBleedAlignment(vocal: Float32Array, beat: Float32Array, baseOffset: number, searchRadius: number) {
+    const score = (lag: number, step: number) => {
+      let dot = 0
+      let beatEnergy = 0
+      for (let i = 0; i < vocal.length; i += step) {
+        const beatIndex = baseOffset + lag + i
+        if (beatIndex < 0 || beatIndex >= beat.length) continue
+        const b = beat[beatIndex]
+        dot += vocal[i] * b
+        beatEnergy += b * b
+      }
+      return { dot, beatEnergy }
+    }
+
+    let bestLag = 0
+    let bestCorrelation = -Infinity
+    for (let lag = -searchRadius; lag <= searchRadius; lag += 8) {
+      const { dot, beatEnergy } = score(lag, 4)
+      if (beatEnergy <= 0) continue
+      const correlation = (dot * dot) / beatEnergy
+      if (correlation > bestCorrelation) { bestCorrelation = correlation; bestLag = lag }
+    }
+    for (let lag = bestLag - 8; lag <= bestLag + 8; lag++) {
+      const { dot, beatEnergy } = score(lag, 4)
+      if (beatEnergy <= 0) continue
+      const correlation = (dot * dot) / beatEnergy
+      if (correlation > bestCorrelation) { bestCorrelation = correlation; bestLag = lag }
+    }
+
+    const { dot, beatEnergy } = score(bestLag, 1)
+    if (beatEnergy <= 0) return null
+    // Clamped: a fit above ~1.5 means the correlation latched onto something that is not
+    // bleed, and applying it would gouge the vocal.
+    const alpha = Math.max(0, Math.min(1.5, dot / beatEnergy))
+    return { lag: bestLag, alpha }
   }
 
   // Print peak + 8-segment RMS so the audible content position is unambiguous.

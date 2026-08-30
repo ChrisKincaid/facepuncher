@@ -114,6 +114,11 @@ export default function App() {
   const [monitorGain, setMonitorGain] = useState(0.8)
   const [metronomeEnabled, setMetronomeEnabled] = useState(false)
   const [metronomeVolume, setMetronomeVolume] = useState(0.5)
+  const [bleedCancelEnabled, setBleedCancelEnabled] = useState(false)
+  // stopRecordingFlow runs from a setTimeout captured in an earlier render, so reading
+  // the state directly there would use whatever the toggle was when recording started.
+  const bleedCancelEnabledRef = useRef(bleedCancelEnabled)
+  useEffect(() => { bleedCancelEnabledRef.current = bleedCancelEnabled }, [bleedCancelEnabled])
   const [isCalibratingMic, setIsCalibratingMic] = useState(false)
   const [showCalibrationModal, setShowCalibrationModal] = useState(false)
   const [calibrationCountdown, setCalibrationCountdown] = useState(0)
@@ -168,6 +173,7 @@ export default function App() {
   const pendingUndoRef = useRef<{ take: Take; index: number } | null>(null)
   const [isExportingProject, setIsExportingProject] = useState(false)
   const [projectToast, setProjectToast] = useState<string | null>(null)
+  const [projectToastEmphasis, setProjectToastEmphasis] = useState(false)
   const [fistPresets, setFistPresets] = useState<FistPreset[]>([])
   const [presetsError, setPresetsError] = useState<string | null>(null)
   const [selectedPresetId, setSelectedPresetId] = useState('')
@@ -566,7 +572,7 @@ export default function App() {
       setCalibrationCountdown(0)
       const result = await audioEngine.runLatencyCalibration()
       if (result.status === 'no-signal') {
-        showProjectToast('No speaker feedback detected. If you are using headphones, please use the \u201cShift Vocals\u201d slider or nudge buttons to set your timing manually.', 9000)
+        showProjectToast('No speaker feedback detected. If you are using headphones, please use the \u201cShift Vocals\u201d slider or nudge buttons to set your timing manually.', 9000, true)
         setStatus('Mic latency calibration cancelled \u2014 no speaker feedback detected.')
       } else {
         updateGlobalSync(result.delayMs)
@@ -1008,9 +1014,23 @@ export default function App() {
       setStatus('No microphone audio was captured. Check the selected input and try again.')
       return
     }
-    const blob = encodeWavFromAudioBuffer(buffer, true)
+    let takeBuffer = buffer
+    let bleedCancelled = false
+    const bleedCancelActive = bleedCancelEnabledRef.current
+    console.log('%c[BLEED] stopRecordingFlow gate', 'color:#fff;background:#527;padding:2px 6px', {
+      toggleEnabled: bleedCancelActive,
+      hasTargetBar: !!targetBar,
+      hasBeatBuffer: !!audioEngine.beatAudioBuffer,
+      latencyOffsetMs: vocalSyncMsRef.current,
+    })
+    if (bleedCancelActive && targetBar) {
+      const cleaned = audioEngine.cancelSpeakerBleed(buffer, targetBar.startSec, vocalSyncMsRef.current)
+      if (cleaned) { takeBuffer = cleaned; bleedCancelled = true }
+      else console.warn('[BLEED] cancellation skipped — no backing track loaded or sample rate mismatch')
+    }
+    const blob = encodeWavFromAudioBuffer(takeBuffer, true)
     const fileId = `take-${crypto.randomUUID()}`
-      console.log('[Punchin] recording take encoded', { fileId, frames: buffer.length })
+      console.log('[Punchin] recording take encoded', { fileId, frames: takeBuffer.length, bleedCancelled })
     blobCache.current.set(fileId, blob)
     void putBlob(fileId, blob)
     const targetSlot = recordingTarget?.slot
@@ -1020,17 +1040,18 @@ export default function App() {
       setStatus('Arm a red take slot before recording.')
       return
     }
-    const saved = saveTake(recordingTarget.barIndex, targetSlot, fileId, 1)
+    const saved = saveTake(recordingTarget.barIndex, targetSlot, fileId, 1, bleedCancelled)
     if (!saved.ok) {
       recordingPendingRef.current = false
       recordingTargetRef.current = null
       setStatus(saved.reason === 'locked' ? 'That take is locked. Choose another slot.' : 'Could not save this take.')
       return
     }
-    console.log('[Punchin] take saved', { barIndex: recordingTarget.barIndex, slot: targetSlot, fileId, frames: buffer.length, durationSec: buffer.duration })
+    console.log('[Punchin] take saved', { barIndex: recordingTarget.barIndex, slot: targetSlot, fileId, frames: takeBuffer.length, durationSec: takeBuffer.duration })
     consumeArmedTake(recordingTarget.barIndex)
-    // Cache the decoded take so the unified bar-entry playback path can start it instantly.
-    if (saved.take) decodedTakeCache.current.set(saved.take.takeId, buffer)
+    // Must be the processed buffer: playback reads this cache before ever touching the
+    // stored blob, so seeding it with the raw take would silently bypass bleed removal.
+    if (saved.take) decodedTakeCache.current.set(saved.take.takeId, takeBuffer)
     recordingTargetRef.current = null
     recordingPendingRef.current = false
     setStatus(`Recorded Take ${targetSlot + 1} for Bar ${recordingTarget.barIndex + 1}.`)
@@ -1093,9 +1114,10 @@ export default function App() {
   }, [currentBarIndex, handlePause, handlePlay, isPlaying, playhead, cursor, totalDuration, handleSeek, project.takes, selectTake, setCurrentBar])
 
   // Auto-dismissing toast; the packaging message instead stays up until export resolves.
-  const showProjectToast = (message: string, durationMs = 4000) => {
+  const showProjectToast = (message: string, durationMs = 4000, emphasis = false) => {
     if (projectToastTimer.current) window.clearTimeout(projectToastTimer.current)
     setProjectToast(message)
+    setProjectToastEmphasis(emphasis)
     projectToastTimer.current = window.setTimeout(() => {
       projectToastTimer.current = null
       setProjectToast(null)
@@ -1618,6 +1640,17 @@ export default function App() {
                   title="Metronome volume"
                 />
               </div>
+              <button
+                type="button"
+                className={`beat-setup-bleed-cancel ${bleedCancelEnabled ? 'loop-toggle-on' : 'secondary'}`}
+                aria-pressed={bleedCancelEnabled}
+                onClick={() => setBleedCancelEnabled((enabled) => !enabled)}
+                title={bleedCancelEnabled
+                  ? 'Bleed Cancellation on — new takes subtract speaker leakage'
+                  : 'Bleed Cancellation off — record the raw mic signal'}
+              >
+                Bleed Cancel
+              </button>
               <div className="beat-setup-actions">
                 <button
                   className="beat-setup-auto-bpm"
@@ -1797,7 +1830,7 @@ export default function App() {
       </div>
 
       {projectToast && (
-        <div className="undo-toast project-toast" role="status">
+        <div className={`undo-toast project-toast ${projectToastEmphasis ? 'project-toast-alert' : ''}`} role="status">
           {isExportingProject && <span className="button-spinner" aria-hidden="true" />}
           <span>{projectToast}</span>
         </div>
