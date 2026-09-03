@@ -21,6 +21,8 @@ html {
 
 body {
   margin: 0;
+  height: 100vh;
+  overflow: hidden;
   font-family: var(--font);
   font-size: 8px;
   background: radial-gradient(circle at 20% 20%, rgba(77, 208, 225, 0.12), transparent 30%),
@@ -30,7 +32,8 @@ body {
 }
 
 #root {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sticky-transport-header {
@@ -53,6 +56,19 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 2px 6px;
   display: block;
+}
+
+.workspace-empty-state {
+  display: grid;
+  min-height: var(--waveform-height);
+  place-items: center;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 7px;
+  letter-spacing: 0.4px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .nav-scrub {
@@ -123,6 +139,10 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 0;
+}
+
+.mobile-micro-waveform {
+  display: none;
 }
 
 .transport-bpm {
@@ -357,6 +377,17 @@ body {
   margin-bottom: 5px;
 }
 
+.section-header-toggle {
+  cursor: pointer;
+}
+
+.bars-header-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 /* Sits inline next to the section title rather than pinned to the corner, so the
    question mark reads as belonging to that heading. */
 .section-help-button {
@@ -588,12 +619,25 @@ body {
   width: 100%;
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 4px;
+}
+
+.shell > :not(.bar-list-panel) {
+  flex: 0 0 auto;
 }
 
 .bar-list-panel {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bar-list-panel.is-collapsed {
+  flex: 0 0 auto;
 }
 
 .app-title-block {
@@ -692,10 +736,8 @@ body {
   flex-wrap: wrap;
 }
 
-/* Collapsible section with a full-height toggle tab pinned to its right edge. */
 .section-collapsible {
   position: relative;
-  padding-right: 20px;
 }
 
 .section-body {
@@ -704,44 +746,6 @@ body {
   z-index: 1;
 }
 
-.section-tab {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 10;
-  pointer-events: auto;
-  width: 16px;
-  height: 100%;
-  min-height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  padding: 0;
-  font-size: 5.5px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--muted);
-  background: rgba(148, 156, 166, 0.08);
-  border: 1px solid var(--border);
-  border-radius: 0 4px 4px 0;
-  cursor: pointer;
-}
-
-.section-tab:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: rgba(77, 208, 225, 0.12);
-}
-
-.section-tab-open {
-  color: var(--accent);
-  border-color: rgba(77, 208, 225, 0.55);
-}
-
-/* Collapsed sections drop the vertical strip for a plain horizontal pill. */
 .section-collapsible.is-collapsed {
   padding-right: 4px;
 }
@@ -753,19 +757,6 @@ body {
   min-height: 20px;
   padding-right: 40px;
   padding-left: 40px;
-}
-
-.section-tab-collapsed {
-  top: 50%;
-  right: 0;
-  transform: translateY(-50%);
-  width: auto;
-  height: auto;
-  min-height: 0;
-  writing-mode: horizontal-tb;
-  text-orientation: initial;
-  padding: 3px 9px;
-  border-radius: 999px;
 }
 
 .section-collapsed-bar {
@@ -1336,25 +1327,24 @@ input[type='file'] {
 
 /* Its own scroll container so bar rows snap independently of the page scroll. */
 .bar-list {
-  --bar-row-height: 15px;
   --bar-ctrl-scale: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: calc(100vh - var(--sticky-header-height, 0px) - 70px);
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  max-height: none;
   overflow-y: auto;
-  scroll-snap-type: y mandatory;
-  scroll-behavior: smooth;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 .bar-list.bar-scale-2x {
-  --bar-row-height: 30px;
   --bar-ctrl-scale: 2;
 }
 
 .bar-list.bar-scale-4x {
-  --bar-row-height: 60px;
   --bar-ctrl-scale: 4;
 }
 
@@ -1387,16 +1377,15 @@ input[type='file'] {
   border-radius: 2.5px;
   background: rgba(255, 255, 255, 0.02);
   cursor: pointer;
-  scroll-snap-align: start;
+  margin-bottom: 1px;
 }
 
 .bar-main-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: var(--bar-row-height);
-  height: var(--bar-row-height);
-  transition: height 0.15s ease;
+  min-height: 15px;
+  height: auto;
   padding: 0 3px;
   position: relative;
   z-index: 1;
@@ -2197,11 +2186,6 @@ input[type='file'] {
   }
 }
 
-/* The Bars accordion tab only exists for the mobile layout. */
-.bars-accordion-tab {
-  display: none;
-}
-
 /* Desktop-only Beat Setup proportions; the mobile block below re-stacks all of this. */
 @media (min-width: 769px) {
   /* Equal-height clusters, all on one row. nowrap matters: the Bleed group grows to fill
@@ -2254,24 +2238,107 @@ input[type='file'] {
 
 /* Touch screens get the tallest rows regardless of the manual zoom step. */
 @media (max-width: 768px) {
-  /* Each zoom step must resolve to different values here or the -/+ buttons change state
-   with nothing to show for it. Rows are two-line cards on mobile, so the waveform height
-   carries the zoom rather than --bar-row-height. */
+  .mobile-bars-only .app-title-block,
+  .mobile-bars-only .volume-panel,
+  .mobile-bars-only .project-export-panel,
+  .mobile-bars-only .setup-stack {
+    display: none;
+  }
+
+  .sticky-transport-header {
+    position: static;
+  }
+
+  .sticky-transport-header > .waveform-section {
+    display: none;
+  }
+
+  .playback-controls-panel {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1000;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    border-bottom: 0;
+  }
+
+  .app-layout:not(.has-audio-loaded) .playback-controls-panel {
+    display: none;
+  }
+
+  .mobile-micro-waveform {
+    flex: 0 0 100%;
+    display: block;
+    height: 28px;
+    --waveform-height: 28px;
+  }
+
+  .playback-play-group,
+  .playback-loop-group {
+    display: contents;
+  }
+
+  .playback-controls-panel .playback-back-button,
+  .playback-controls-panel .playback-wide-button,
+  .playback-controls-panel .playback-loop-eye {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 40px;
+    min-height: 40px;
+    margin: 0;
+    border-radius: 4px;
+  }
+
+  .playback-controls-panel .playback-back-button {
+    flex: 0 0 44px;
+    padding: 0;
+    border: 1px solid var(--border);
+  }
+
+  .playback-controls-panel .playback-play-group .playback-wide-button {
+    flex: 2 1 auto;
+    min-width: 0;
+    padding: 0 12px;
+  }
+
+  .playback-controls-panel .playback-loop-group .playback-wide-button {
+    flex: 1 1 auto;
+    min-width: 120px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+  }
+
+  .playback-controls-panel .playback-loop-eye {
+    flex: 0 0 44px;
+    padding: 0;
+    border: 1px solid var(--border) !important;
+  }
+
+  .bar-list {
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+
+  /* On mobile, waveform height carries the visual row scale. */
   .bar-list,
   .bar-list.bar-scale-1x {
-    --bar-row-height: auto;
     --bar-wave-height: 26px;
     --bar-ctrl-scale: 1.8;
   }
 
   .bar-list.bar-scale-2x {
-    --bar-row-height: auto;
     --bar-wave-height: 40px;
     --bar-ctrl-scale: 2.2;
   }
 
   .bar-list.bar-scale-4x {
-    --bar-row-height: auto;
     --bar-wave-height: 62px;
     --bar-ctrl-scale: 2.7;
   }
@@ -2319,26 +2386,6 @@ input[type='file'] {
     flex-direction: column;
     gap: 6px;
     min-height: 0;
-  }
-
-  /* ── accordion ── */
-  .bars-accordion-tab {
-    display: block;
-    width: 100%;
-    margin-bottom: 4px;
-    padding: 10px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--text);
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-  }
-
-  .bars-accordion-collapsed .bar-list-panel {
-    display: none;
   }
 
   /* ── portrait fitting ── */
@@ -2713,10 +2760,10 @@ body.drag-slider-active * {
   padding-top: 0;
   padding-right: 16px;
   scrollbar-gutter: stable;
-  display: block;
-  flex: 1;
+  display: flex;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* ── Bar waveform editor ── */

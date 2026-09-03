@@ -7,7 +7,10 @@ import { DragVolumeSlider } from './DragVolumeSlider'
 type BarScale = 1 | 2 | 4
 
 interface Props {
+  expanded: boolean
+  onToggleSection: () => void
   bars: Bar[]
+  emptyMessage: string
   audioBuffer?: AudioBuffer
   playhead: number
   loopRange?: { start: number; end: number }
@@ -40,7 +43,10 @@ interface Props {
 }
 
 export function BarList({
+  expanded,
+  onToggleSection,
   bars,
+  emptyMessage,
   audioBuffer,
   playhead,
   loopRange,
@@ -78,7 +84,9 @@ export function BarList({
   const [justPasted, setJustPasted] = useState(false)
   const pastedTimer = useRef<number | null>(null)
 
-  useEffect(() => () => { if (pastedTimer.current) window.clearTimeout(pastedTimer.current) }, [])
+  useEffect(() => () => {
+    if (pastedTimer.current) window.clearTimeout(pastedTimer.current)
+  }, [])
 
   // A copy stays on the clipboard for repeat pastes, so the banner is the only place
   // that can confirm the paste landed.
@@ -91,10 +99,25 @@ export function BarList({
       setJustPasted(false)
     }, 1600)
   }
+
   return (
-    <div className="panel bar-list-panel">
-      <div className="collapsible-header" style={{ marginBottom: 6 }}>
-        <div className="bar-scale-controls" onClick={(e) => e.stopPropagation()}>
+    <div className={`panel bar-list-panel ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
+      <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={expanded} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); onToggleSection() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggleSection() } }} style={{ marginBottom: expanded ? 6 : 0 }}>
+        <div className="bars-header-title">
+          <span className="collapsible-title">Bars</span>
+          <button
+            className="section-help-button"
+            type="button"
+            aria-label="How do bars and takes work?"
+            title="How do bars and takes work?"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); onShowHelp() }}
+          >
+            ?
+          </button>
+        </div>
+        {expanded && bars.length > 0 && (
+        <div className="bar-scale-controls" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <button
             type="button"
             className={`secondary bar-focus-button ${focusMode ? 'bar-focus-on' : ''}`}
@@ -106,7 +129,7 @@ export function BarList({
               onToggleFocus()
             }}
           >
-            {focusMode ? 'Show All' : 'BARS ONLY'}
+            {focusMode ? 'Show Settings' : 'Bars Only'}
           </button>
           <button
             type="button"
@@ -138,17 +161,14 @@ export function BarList({
             +
           </button>
         </div>
-        <span className="collapsible-title">Bars</span>
-        <button
-          className="section-help-button"
-          type="button"
-          aria-label="How do bars and takes work?"
-          title="How do bars and takes work?"
-          onClick={(event) => { event.stopPropagation(); onShowHelp() }}
-        >
-          ?
-        </button>
+        )}
       </div>
+
+      {expanded && (!bars.length ? (
+        <div className="workspace-empty-state" role="status">
+          {emptyMessage}
+        </div>
+      ) : <>
 
       {clipboardTake && (
         <div className={`clipboard-banner ${justPasted ? 'clipboard-banner-done' : ''}`} role="status">
@@ -163,7 +183,7 @@ export function BarList({
         </div>
       )}
 
-      <div className={`bar-list bar-scale-${barScale}x`}>
+      <div className={`bar-list bar-scale-${barScale}x`} tabIndex={0}>
         {bars.map((bar) => {
           const active = playhead >= bar.startSec && playhead < bar.endSec
           const inLoop = loopRange && bar.index >= loopRange.start && bar.index <= loopRange.end
@@ -400,6 +420,7 @@ export function BarList({
           )
         })}
       </div>
+      </>)}
     </div>
   )
 }

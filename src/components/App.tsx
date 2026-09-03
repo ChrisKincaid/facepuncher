@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { HorizontalWaveformDetail } from './HorizontalWaveformDetail'
 import { Mixer } from './Mixer'
 import { ExportDialog } from './ExportDialog'
@@ -77,21 +77,15 @@ const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; 
   },
 }
 
-// Collapsing reflows the page under the cursor, so pointerup can land on a different element
-// and the click event never fires. Commit the toggle on pointerdown instead.
-function sectionToggleHandlers(setOpen: Dispatch<SetStateAction<boolean>>) {
-  return sectionActionHandlers(() => setOpen((open) => !open))
-}
-
 // Same pointerdown semantics for toggles that need custom logic rather than a setter.
 function sectionActionHandlers(toggle: () => void) {
   return {
-    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
       event.preventDefault()
       event.stopPropagation()
       toggle()
     },
-    onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return
       event.preventDefault()
       toggle()
@@ -186,34 +180,37 @@ export default function App() {
   const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null)
   const [showSetup, setShowSetup] = useState(true)
-  const [showProject, setShowProject] = useState(true)
-  const [showVolume, setShowVolume] = useState(true)
-  const [showBars, setShowBars] = useState(true)
+  const [showProject, setShowProject] = useState(false)
+  const [showVolume, setShowVolume] = useState(false)
+  const [showBars, setShowBars] = useState(false)
+  const [barsOnly, setBarsOnly] = useState(false)
   const [isMobileLayout, setIsMobileLayout] = useState(() => window.matchMedia('(max-width: 768px)').matches)
 
   useEffect(() => {
     const query = window.matchMedia('(max-width: 768px)')
-    const sync = (event: MediaQueryListEvent) => setIsMobileLayout(event.matches)
+    const sync = (event: MediaQueryListEvent) => {
+      setIsMobileLayout(event.matches)
+      if (event.matches) {
+        setShowVolume(false)
+        setShowProject(false)
+        setShowSetup(true)
+        setShowBars(false)
+        setBarsOnly(false)
+      }
+    }
     query.addEventListener('change', sync)
     return () => query.removeEventListener('change', sync)
   }, [])
 
-  // Below 768px these three behave as an accordion so only one eats vertical space at a
-  // time. Volume stays out of it — it's meant to remain reachable at the top.
-  const toggleAccordionPanel = (panel: 'setup' | 'project' | 'bars') => {
-    const isOpen = panel === 'setup' ? showSetup : panel === 'project' ? showProject : showBars
-    if (!isMobileLayout) {
-      if (panel === 'setup') setShowSetup(!isOpen)
-      else if (panel === 'project') setShowProject(!isOpen)
-      else setShowBars(!isOpen)
-      return
-    }
-    setShowSetup(!isOpen && panel === 'setup')
-    setShowProject(!isOpen && panel === 'project')
-    setShowBars(!isOpen && panel === 'bars')
+  // Exactly one workspace section can occupy the available vertical space at a time.
+  const toggleAccordionPanel = (panel: 'volume' | 'setup' | 'project' | 'bars') => {
+    setBarsOnly(false)
+    setShowVolume(panel === 'volume')
+    setShowSetup(panel === 'setup')
+    setShowProject(panel === 'project')
+    setShowBars(panel === 'bars')
   }
 
-  const upperSectionsOpen = showVolume || showSetup || showProject
   const stickyHeaderRef = useRef<HTMLDivElement | null>(null)
 
   // The sticky header overlaps the top of the page, so the snap offset has to account
@@ -230,11 +227,7 @@ export default function App() {
     return () => observer.disconnect()
   }, [])
 
-  const scrollBarsToTop = () => {
-    document.querySelector<HTMLElement>('.bar-list')?.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  const [showWaveform, setShowWaveform] = useState(true)
+  const showWaveform = true
   // Firefox's AudioWorklet delivers empty input on some render quanta during sustained loud
   // input, silently corrupting recordings — confirmed unfixable from JS; recommend Chromium.
   const [showBrowserWarning, setShowBrowserWarning] = useState(() => /firefox/i.test(navigator.userAgent))
@@ -265,6 +258,15 @@ export default function App() {
     [project.beat.durationSec, project.bars],
   )
   const audioLoaded = useMemo(() => Boolean(audioUrl && totalDuration > 0), [audioUrl, totalDuration])
+
+  useEffect(() => {
+    if (audioLoaded) return
+    setBarsOnly(false)
+    setShowProject(true)
+    setShowVolume(false)
+    setShowSetup(false)
+    setShowBars(false)
+  }, [audioLoaded, isMobileLayout])
 
   useEffect(() => {
     vocalSyncMsRef.current = project.latencyOffsetMs
@@ -1466,8 +1468,25 @@ export default function App() {
     }
   }
 
+  const enterBarsOnlyMode = () => {
+    if (!isMobileLayout || !audioLoaded) return
+    setBarsOnly(true)
+    setShowVolume(false)
+    setShowSetup(false)
+    setShowProject(false)
+    setShowBars(true)
+  }
+
+  const exitBarsOnlyMode = () => {
+    setBarsOnly(false)
+    setShowVolume(false)
+    setShowProject(false)
+    setShowSetup(false)
+    setShowBars(true)
+  }
+
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${audioLoaded ? 'has-audio-loaded' : ''} ${isMobileLayout && audioLoaded && barsOnly ? 'mobile-bars-only' : ''}`}>
       <div className="app-main">
         <div className="shell">
           <div className="app-title-block">
@@ -1479,10 +1498,15 @@ export default function App() {
           </div>
 
           <div className="sticky-transport-header" ref={stickyHeaderRef}>
-        <div className={`section-collapsible ${showWaveform ? '' : 'is-collapsed'}`}>
+        <div className={`section-collapsible waveform-section ${showWaveform ? '' : 'is-collapsed'}`}>
         <div className="section-body">
         {showWaveform ? (
         <div className="top-nav">
+        {!audioLoaded ? (
+          <div className="workspace-empty-state" role="status">
+            Import a beat to unlock BARS and recording controls
+          </div>
+        ) : (
         <div className="nav-scrub">
           <div className="nav-waveform-stage">
             <HorizontalWaveformDetail
@@ -1525,23 +1549,30 @@ export default function App() {
             </div>
           </div>
         </div>
+        )}
         </div>
         ) : (
           <div className="section-collapsed-bar">Waveform hidden</div>
         )}
         </div>
-        <button
-          type="button"
-          className={`section-tab ${showWaveform ? 'section-tab-open' : 'section-tab-collapsed'}`}
-          aria-expanded={showWaveform}
-          title={showWaveform ? 'Hide the waveform' : 'Show the waveform'}
-          {...sectionToggleHandlers(setShowWaveform)}
-        >
-          {showWaveform ? 'Hide' : 'Show'}
-        </button>
         </div>
 
         <div className="playback-controls-panel">
+        <div className="mobile-micro-waveform" aria-hidden="true">
+          <HorizontalWaveformDetail
+            audioBuffer={audioEngine.beatAudioBuffer ?? null}
+            playhead={playhead}
+            cursor={cursor}
+            isPlaying={isPlaying}
+            totalDuration={totalDuration}
+            bars={project.bars}
+            currentBarIndex={currentBarIndex}
+            loopEnabled={loopEnabled}
+            loopRange={loopRange}
+            onLoopRangeChange={handleLoopChange}
+            onSeek={handleSeek}
+          />
+        </div>
         <div className="playback-play-group">
           <button className="playback-back-button" onClick={() => handleSeek(0)} disabled={!audioLoaded || isRecording} title="Back to start (00:00)">⏮</button>
           <button className="playback-wide-button" onClick={isPlaying ? handlePause : handlePlay} disabled={!audioLoaded} title={isPlaying ? 'Pause — keeps position [Space]' : 'Play from current position [Space]'}>
@@ -1569,16 +1600,18 @@ export default function App() {
           </button>
         </div>
         </div>
+        </div>
 
         <section className={`panel volume-panel section-collapsible ${showVolume ? '' : 'is-collapsed'}`}>
         <div className="section-body">
-        <div className="collapsible-header">
+        <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showVolume} {...sectionActionHandlers(() => toggleAccordionPanel('volume'))}>
           <span className="collapsible-title">Volume</span>
           <button
             className="section-help-button"
             type="button"
             aria-label="What do the Volume controls do?"
             title="What do the Volume controls do?"
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => { event.stopPropagation(); setHelpTopic('volume') }}
           >
             ?
@@ -1621,27 +1654,18 @@ export default function App() {
         />
         )}
         </div>
-        <button
-          type="button"
-          className={`section-tab ${showVolume ? 'section-tab-open' : 'section-tab-collapsed'}`}
-          aria-expanded={showVolume}
-          title={showVolume ? 'Hide Volume' : 'Show Volume'}
-          {...sectionToggleHandlers(setShowVolume)}
-        >
-          {showVolume ? 'Hide' : 'Show'}
-        </button>
         </section>
-          </div>
 
           <section className={`panel project-export-panel section-collapsible ${showProject ? '' : 'is-collapsed'}`}>
             <div className="section-body">
-            <div className="collapsible-header">
+            <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showProject} {...sectionActionHandlers(() => toggleAccordionPanel('project'))}>
               <span className="collapsible-title">Import / Export</span>
               <button
                 className="section-help-button"
                 type="button"
                 aria-label="What do the Import / Export controls do?"
                 title="What do the Import / Export controls do?"
+                onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => { event.stopPropagation(); setHelpTopic('project') }}
               >
                 ?
@@ -1767,15 +1791,6 @@ export default function App() {
               </div>
             )}
             </div>
-            <button
-              type="button"
-              className={`section-tab ${showProject ? 'section-tab-open' : 'section-tab-collapsed'}`}
-              aria-expanded={showProject}
-              title={showProject ? 'Hide Import / Export' : 'Show Import / Export'}
-              {...sectionActionHandlers(() => toggleAccordionPanel('project'))}
-            >
-              {showProject ? 'Hide' : 'Show'}
-            </button>
           </section>
 
           {showBrowserWarning && (
@@ -1793,13 +1808,14 @@ export default function App() {
           <section className={`setup-stack section-collapsible ${showSetup ? '' : 'setup-stack-collapsed is-collapsed'}`}>
           <div className="section-body">
           {/* Outside the showSetup branch so the title and its help stay reachable while collapsed. */}
-          <div className="collapsible-header">
+          <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showSetup} {...sectionActionHandlers(() => toggleAccordionPanel('setup'))}>
             <span className="collapsible-title">Beat Setup</span>
             <button
               className="section-help-button"
               type="button"
               aria-label="What do the Beat Setup controls do?"
               title="What do the Beat Setup controls do?"
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => { event.stopPropagation(); setHelpTopic('setup') }}
             >
               ?
@@ -2012,30 +2028,13 @@ export default function App() {
           </section>
           </>}
           </div>
-          <button
-            type="button"
-            className={`section-tab ${showSetup ? 'section-tab-open' : 'section-tab-collapsed'}`}
-            aria-expanded={showSetup}
-            title={showSetup ? 'Hide Beat Setup' : 'Show Beat Setup'}
-            {...sectionActionHandlers(() => toggleAccordionPanel('setup'))}
-          >
-            {showSetup ? 'Hide' : 'Show'}
-          </button>
           </section>
 
-          {/* The tab is mobile-only via CSS; on desktop this wrapper is inert. */}
-          <div className={`bars-accordion ${showBars ? '' : 'bars-accordion-collapsed'}`}>
-          <button
-            type="button"
-            className="bars-accordion-tab"
-            aria-expanded={showBars}
-            title={showBars ? 'Hide Bars' : 'Show Bars'}
-            {...sectionActionHandlers(() => toggleAccordionPanel('bars'))}
-          >
-            Bars {showBars ? '\u2303' : '\u2304'}
-          </button>
-          <BarList
+          {audioLoaded && <BarList
+            expanded={showBars}
+            onToggleSection={() => toggleAccordionPanel('bars')}
             bars={project.bars}
+            emptyMessage="Set Bar 1 in Beat Setup to generate bars"
             audioBuffer={audioEngine.beatAudioBuffer}
             playhead={displayPos}
             loopRange={loopRange}
@@ -2084,19 +2083,12 @@ export default function App() {
             onPasteTake={(barIndex) => { void handleTakePaste(barIndex) }}
             onClearClipboard={handleClearClipboard}
             onMoveTakeToBar={handleTakeDropOnBar}
-            focusMode={!upperSectionsOpen}
+            focusMode={barsOnly}
             onShowHelp={() => setHelpTopic('bars')}
-            onToggleFocus={() => {
-              const next = !upperSectionsOpen
-              setShowVolume(next)
-              setShowSetup(next)
-              setShowProject(next)
-              scrollBarsToTop()
-            }}
+            onToggleFocus={barsOnly ? exitBarsOnlyMode : enterBarsOnlyMode}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
-          />
-          </div>
+          />}
         </div>
       </div>
 
