@@ -17,7 +17,7 @@ import { deleteBlob, getBlob, listProjects, putBlob, saveProject } from '../data
 import { exportProjectToFist, importProjectFromFist } from '../utils/fistProjectService'
 import { downloadFistPreset, fetchFistPresets } from '../utils/presetService'
 import type { FistPreset } from '../utils/presetService'
-import type { Take } from '../data/models'
+import type { GlobalOverlayMode, Take } from '../data/models'
 
 const FALLBACK_LOOP_BARS = 16
 // Android and iOS route an audio accept list to capture apps and the gallery; omitting it sends
@@ -130,6 +130,9 @@ export default function App() {
     setBeatMeta,
     setBar1AnchorTime,
     setBars,
+    setGlobalOverlayDefault,
+    resetBarOverlayModesToGlobal,
+    setBarOverlayMode,
     setAudioUrl,
     setBeatFile,
     setCurrentBar,
@@ -832,6 +835,7 @@ export default function App() {
     // hardware input latency the user wants to dial in. Measured fresh right before playTake
     // is actually called, since a cold-cache decode below can take long enough to go stale.
     const bar = project.bars[barIndex]
+    const playbackOptions = getTakePlaybackOptions(barIndex)
     const computeOffsetAndDelay = () => {
       const lagSec = bar ? Math.max(0, audioEngine.currentTime - bar.startSec) : 0
       const syncSec = vocalSyncMsRef.current / 1000
@@ -842,7 +846,7 @@ export default function App() {
     if (cached) {
       logBufferRegions('PLAY from-cache', barIndex, take.takeId, cached)
       const { offsetSec, delaySec } = computeOffsetAndDelay()
-      const startAt = audioEngine.playTake(cached, offsetSec, gainValue, delaySec)
+      const startAt = audioEngine.playTake(cached, offsetSec, gainValue, delaySec, playbackOptions)
       // Chain math needs the take's "virtual" position-0 instant, not the literal start time —
       // a negative sync skips into the buffer instead of delaying, so the buffer's own position
       // 0 effectively happened offsetSec before startAt. Without subtracting it back out here,
@@ -858,7 +862,7 @@ export default function App() {
       if (!isPlayingRef.current || recordingActiveRef.current) return undefined
       logBufferRegions('PLAY from-decode', barIndex, take.takeId, buffer)
       const { offsetSec, delaySec } = computeOffsetAndDelay()
-      const startAt = audioEngine.playTake(buffer, offsetSec, gainValue, delaySec)
+      const startAt = audioEngine.playTake(buffer, offsetSec, gainValue, delaySec, playbackOptions)
       return startAt === undefined ? undefined : startAt - offsetSec
     } catch (err) {
       console.error('take playback failed', err)
@@ -871,6 +875,26 @@ export default function App() {
   // entering a bar beyond this horizon just falls back to the reactive path and re-triggers
   // another burst from there, so a full song still ends up fully chained after enough passes.
   const MAX_CHAIN_BARS = 32
+
+  const getTakePlaybackOptions = useCallback((barIndex: number) => {
+    const resolveOverlayMode = (index: number): GlobalOverlayMode => {
+      const mode = project.bars[index]?.overlayMode
+      return mode && mode !== 'global' ? mode : project.globalOverlayDefault ?? 'hard_cut'
+    }
+    const barHasActivePlaybackTake = (index: number) => {
+      if (armedTakeByBar[index]?.length) return false
+      return project.takes.some((item) => item.barIndex === index && item.selected)
+    }
+    const bar = project.bars[barIndex]
+    const nextBar = project.bars[barIndex + 1]
+    const previousMode = barIndex > 0 ? resolveOverlayMode(barIndex - 1) : undefined
+    return {
+      overlayMode: resolveOverlayMode(barIndex),
+      nextBarOffsetSec: bar && nextBar ? nextBar.startSec - bar.startSec : undefined,
+      nextBarHasTake: nextBar ? barHasActivePlaybackTake(nextBar.index) : false,
+      fadeInSec: previousMode === 'crossfade' ? 0.1 : 0,
+    }
+  }, [armedTakeByBar, project.bars, project.globalOverlayDefault, project.takes])
 
   // Schedule bar-after-bar takes at exact, back-to-back AudioContext times with no fade at
   // the seam, so a note held across two recorded takes plays as one continuous sound. Stops
@@ -905,12 +929,12 @@ export default function App() {
       if (!isPlayingRef.current || recordingActiveRef.current) return
       const nextStartAt = startAt + (nextBar.startSec - bar.startSec)
       const gainValue = take.gain
-      audioEngine.scheduleTakeAt(buffer, nextIndex, nextStartAt, gainValue)
+      audioEngine.scheduleTakeAt(buffer, nextIndex, nextStartAt, gainValue, getTakePlaybackOptions(nextIndex))
       chainedThroughBarRef.current = Math.max(chainedThroughBarRef.current, nextIndex)
       barIndex = nextIndex
       startAt = nextStartAt
     }
-  }, [armedTakeByBar, loopEnabled, loopRange, project.bars, project.takes])
+  }, [armedTakeByBar, getTakePlaybackOptions, loopEnabled, loopRange, project.bars, project.takes])
 
 
   function logBufferRegions(tag: string, barIndex: number, takeId: string, buffer: AudioBuffer) {
@@ -967,7 +991,7 @@ export default function App() {
         adjustedOffset,
         playbackDelay,
       })
-      audioEngine.playTake(buffer, adjustedOffset, take.gain, playbackDelay)
+      audioEngine.playTake(buffer, adjustedOffset, take.gain, playbackDelay, getTakePlaybackOptions(barIndex))
     } catch (err) {
       console.error('selected take playback failed', err)
     }
@@ -2119,6 +2143,7 @@ export default function App() {
             currentBarIndex={currentBarIndex}
             isRecording={isRecording}
             isVocalMuted={isVocalMuted}
+            globalOverlayDefault={project.globalOverlayDefault ?? 'hard_cut'}
             takes={project.takes}
             armedTakeByBar={armedTakeByBar}
             auditioningTakeId={auditioningTakeId}
@@ -2165,6 +2190,9 @@ export default function App() {
             onShowHelp={() => setHelpTopic('bars')}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
+            onGlobalOverlayDefaultChange={setGlobalOverlayDefault}
+            onResetBarOverlaysToGlobal={resetBarOverlayModesToGlobal}
+            onBarOverlayModeChange={setBarOverlayMode}
             onToggleVocalMute={() => {
               const nextMuted = !isVocalMuted
               audioEngine.setMasterVocalMuted(nextMuted)

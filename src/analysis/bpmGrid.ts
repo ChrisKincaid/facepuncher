@@ -15,7 +15,7 @@ export function generateBars(durationSec: number, bpm: number, beatsPerBar = 4, 
     const startSec = start + barLen * i
     const endSec = clamp(start + barLen * (i + 1), 0, durationSec)
     if (startSec >= durationSec) break
-    bars.push({ index: i, startSec, endSec })
+    bars.push({ index: i, startSec, endSec, overlayMode: 'global' })
   }
   return bars
 }

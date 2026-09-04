@@ -1,9 +1,13 @@
+export type GlobalOverlayMode = 'hard_cut' | 'natural_decay' | 'crossfade' | 'ducking'
+export type BarOverlayMode = 'global' | GlobalOverlayMode
+
 export interface Project {
   id: string
   name: string
   sampleRate: number
   createdAt: string
   latencyOffsetMs: number
+  globalOverlayDefault: GlobalOverlayMode
   beat: {
     fileId: string
     durationSec: number
@@ -23,6 +27,7 @@ export interface Bar {
   endSec: number
   locked?: boolean
   section?: string
+  overlayMode?: BarOverlayMode
 }
 
 export interface Take {

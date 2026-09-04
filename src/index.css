@@ -1604,12 +1604,14 @@ input[type='file'] {
 
 .bars-toolbar-top-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(96px, 0.7fr) minmax(150px, 1fr) auto;
+  align-items: stretch;
   gap: 3px;
 }
 
 .bars-toolbar-mode,
-.bars-toolbar-delete {
+.bars-toolbar-delete,
+.bars-global-overlay-select {
   min-height: auto;
   padding-top: 4px;
   padding-bottom: 4px;
@@ -1617,6 +1619,14 @@ input[type='file'] {
   align-items: center;
   justify-content: center;
   text-align: center;
+}
+
+.bars-global-overlay-select {
+  width: 100%;
+  min-width: 0;
+  padding-left: 7px;
+  padding-right: 7px;
+  font-size: 9px;
 }
 
 .bars-toolbar-actions {
@@ -1640,7 +1650,7 @@ input[type='file'] {
 
 .bars-toolbar-zoom {
   display: flex;
-  width: 100%;
+  width: auto;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -1821,10 +1831,14 @@ input[type='file'] {
 }
 
 .bar-row-actions .secondary,
+.bar-transfer-button,
+.bar-overlay-button,
 .bar-delete-button {
+  min-width: calc(14px * var(--bar-ctrl-scale, 1));
   min-height: calc(14px * var(--bar-ctrl-scale, 1));
-  padding: calc(2px * var(--bar-ctrl-scale, 1)) calc(4px * var(--bar-ctrl-scale, 1));
+  padding: calc(2px * var(--bar-ctrl-scale, 1));
   font-size: calc(5.5px * var(--bar-ctrl-scale, 1));
+  border-radius: 3px;
 }
 
 .bar-fav-button {
@@ -1860,14 +1874,20 @@ input[type='file'] {
 
 .bar-meta {
   display: flex;
-  align-items: center;
+  align-self: stretch;
+  align-items: flex-end;
+  justify-content: flex-start;
   gap: 3px;
-  min-width: calc(30px * var(--bar-ctrl-scale, 1));
+  min-width: calc(18px * var(--bar-ctrl-scale, 1));
 }
 
 /* Plain text: state is carried by colour alone, no box, border or indicator line. */
 .bar-num {
-  min-width: calc(22px * var(--bar-ctrl-scale, 1));
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  min-width: calc(12px * var(--bar-ctrl-scale, 1));
+  height: 100%;
   font-size: calc(6px * var(--bar-ctrl-scale, 1));
   font-weight: 700;
   white-space: nowrap;
@@ -1913,6 +1933,11 @@ input[type='file'] {
   display: flex;
 }
 
+.bar-overlay-wrap {
+  position: relative;
+  display: flex;
+}
+
 /* Each .bar-main-row opens its own stacking context at z-index 1, so a later bar row
    would paint over an earlier row's popover no matter how high the popover's z-index
    is. Lifting the whole row while its menu is open is what actually keeps it on top. */
@@ -1921,9 +1946,6 @@ input[type='file'] {
 }
 
 .bar-transfer-button {
-  min-width: calc(14px * var(--bar-ctrl-scale, 1));
-  min-height: calc(14px * var(--bar-ctrl-scale, 1));
-  padding: calc(2px * var(--bar-ctrl-scale, 1));
   font-size: calc(7px * var(--bar-ctrl-scale, 1));
   line-height: 1;
 }
@@ -1936,6 +1958,29 @@ input[type='file'] {
 .bar-transfer-loaded {
   border-color: rgba(246, 193, 119, 0.7) !important;
   color: var(--accent-2) !important;
+}
+
+.bar-overlay-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.bar-overlay-button svg {
+  width: calc(9px * var(--bar-ctrl-scale, 1));
+  height: calc(9px * var(--bar-ctrl-scale, 1));
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.bar-overlay-open {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
 }
 
 .bar-transfer-menu {
@@ -1954,6 +1999,50 @@ input[type='file'] {
   border: 1px solid var(--border);
   border-radius: 4px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.85);
+}
+
+.bar-overlay-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 142px;
+  margin-top: 3px;
+  padding: 4px;
+  gap: 3px;
+  background-color: #1a1d24;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.85);
+}
+
+.bar-row:nth-last-child(-n + 2) .bar-overlay-menu {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 3px;
+}
+
+.bar-overlay-action {
+  width: 100%;
+  min-height: 24px;
+  padding: 5px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: left;
+  color: var(--text);
+  background: rgba(148, 156, 166, 0.12);
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+
+.bar-overlay-action:hover,
+.bar-overlay-action-active {
+  color: var(--accent);
+  border-color: rgba(77, 208, 225, 0.55);
+  background: rgba(77, 208, 225, 0.16);
 }
 
 /* Deliberately larger than the surrounding 6px UI — these are tap targets. */

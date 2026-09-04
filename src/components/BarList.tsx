@@ -1,10 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Bar, Take } from '../data/models'
+import type { Bar, BarOverlayMode, GlobalOverlayMode, Take } from '../data/models'
 import { BarWaveformBackdrop } from './BarWaveformBackdrop'
 import { TakeSlots } from './TakeSlots'
 import { DragVolumeSlider } from './DragVolumeSlider'
 
 type BarScale = 1 | 2 | 4
+
+const GLOBAL_OVERLAY_OPTIONS: { value: GlobalOverlayMode; label: string }[] = [
+  { value: 'hard_cut', label: 'Hard Cut (Default)' },
+  { value: 'natural_decay', label: 'Natural Decay' },
+  { value: 'crossfade', label: 'Crossfade Bridge' },
+  { value: 'ducking', label: 'Priority Ducking' },
+]
+
+const BAR_OVERLAY_OPTIONS: { value: BarOverlayMode; label: string }[] = [
+  { value: 'global', label: 'Follow Global' },
+  { value: 'hard_cut', label: 'Hard Cut' },
+  { value: 'natural_decay', label: 'Natural Decay' },
+  { value: 'crossfade', label: 'Crossfade Bridge' },
+  { value: 'ducking', label: 'Priority Ducking' },
+]
 
 interface Props {
   expanded: boolean
@@ -19,6 +34,7 @@ interface Props {
   currentBarIndex: number
   isRecording: boolean
   isVocalMuted: boolean
+  globalOverlayDefault: GlobalOverlayMode
   takes: Take[]
   armedTakeByBar: Record<number, number[]>
   auditioningTakeId?: string
@@ -42,6 +58,9 @@ interface Props {
   onFocusBar: (barIndex: number) => void
   onTakeGain: (takeId: string, value: number) => void
   onToggleVocalMute: () => void
+  onGlobalOverlayDefaultChange: (mode: GlobalOverlayMode) => void
+  onResetBarOverlaysToGlobal: () => void
+  onBarOverlayModeChange: (barIndex: number, mode: BarOverlayMode) => void
 }
 
 export function BarList({
@@ -57,6 +76,7 @@ export function BarList({
   currentBarIndex,
   isRecording,
   isVocalMuted,
+  globalOverlayDefault,
   takes,
   armedTakeByBar,
   auditioningTakeId,
@@ -80,9 +100,13 @@ export function BarList({
   onFocusBar,
   onTakeGain,
   onToggleVocalMute,
+  onGlobalOverlayDefaultChange,
+  onResetBarOverlaysToGlobal,
+  onBarOverlayModeChange,
 }: Props) {
   const [barScale, setBarScale] = useState<BarScale>(2)
   const [openActionBar, setOpenActionBar] = useState<number | null>(null)
+  const [openOverlayBar, setOpenOverlayBar] = useState<number | null>(null)
   const [draggingTakeId, setDraggingTakeId] = useState<string | null>(null)
   const [dropTargetBar, setDropTargetBar] = useState<number | null>(null)
   const [justPasted, setJustPasted] = useState(false)
@@ -154,6 +178,25 @@ export function BarList({
             >
               Hide Controls
             </button>
+            <select
+              className="bars-global-overlay-select"
+              value={globalOverlayDefault}
+              aria-label="Global Overlay"
+              title="Global Overlay"
+              onChange={(event) => {
+                const value = event.target.value
+                if (value === 'reset_all') {
+                  onResetBarOverlaysToGlobal()
+                  return
+                }
+                onGlobalOverlayDefaultChange(value as GlobalOverlayMode)
+              }}
+            >
+              {GLOBAL_OVERLAY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+              <option value="reset_all">Reset All Bars to Global</option>
+            </select>
             <div className="bars-toolbar-zoom" aria-label="Bar row zoom">
               <button type="button" className={`secondary bar-scale-button ${barScale === 1 ? 'bar-scale-disabled' : ''}`} aria-label="Zoom out" onClick={() => setBarScale((scale) => (scale === 4 ? 2 : 1))}>−</button>
               <span className="bar-scale-label">Zoom</span>
@@ -254,7 +297,7 @@ export function BarList({
             <div
               key={bar.index}
               id={`bar-row-${bar.index}`}
-              className={`bar-row ${active ? 'bar-active' : ''} ${inLoop ? 'bar-loop' : ''} ${isDropTarget ? 'bar-drop-target' : ''} ${draggingTakeId && barFull ? 'bar-drop-blocked' : ''} ${openActionBar === bar.index ? 'bar-menu-open' : ''}`}
+              className={`bar-row ${active ? 'bar-active' : ''} ${inLoop ? 'bar-loop' : ''} ${isDropTarget ? 'bar-drop-target' : ''} ${draggingTakeId && barFull ? 'bar-drop-blocked' : ''} ${openActionBar === bar.index || openOverlayBar === bar.index ? 'bar-menu-open' : ''}`}
               onClick={() => onFocusBar(bar.index)}
               onDragOver={(event) => {
                 if (!draggingTakeId) return
@@ -276,7 +319,7 @@ export function BarList({
               <div className="bar-main-row">
               <div className="bar-controls-left">
               <div className="bar-meta">
-                <div className={`bar-num ${headerState}`} title={headerTitle} aria-label={`Bar ${bar.index + 1} — ${headerTitle}`}>Bar {bar.index + 1}</div>
+                <div className={`bar-num ${headerState}`} title={headerTitle} aria-label={`Bar ${bar.index + 1} — ${headerTitle}`}>{bar.index + 1}</div>
               </div>
               <div className="bar-wave-thumb">
                 <TakeSlots
@@ -295,6 +338,51 @@ export function BarList({
                 />
               </div>
               <div className="bar-take-actions" onClick={(e) => e.stopPropagation()}>
+                <div className="bar-overlay-wrap">
+                  <button
+                    type="button"
+                    className={`secondary bar-overlay-button ${openOverlayBar === bar.index ? 'bar-overlay-open' : ''}`}
+                    disabled={!selectedTake}
+                    aria-haspopup="menu"
+                    aria-expanded={openOverlayBar === bar.index}
+                    title={selectedTake ? 'Set overlay mode for this bar' : 'Select a take to set overlay mode'}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      event.preventDefault()
+                      if (!selectedTake) return
+                      setOpenOverlayBar((open) => (open === bar.index ? null : bar.index))
+                      setOpenActionBar(null)
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z" />
+                      <path d="m3 12 9 4.5 9-4.5" />
+                      <path d="m3 16.5 9 4.5 9-4.5" />
+                    </svg>
+                  </button>
+                  {openOverlayBar === bar.index && selectedTake && (
+                    <div className="bar-overlay-menu" role="menu" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+                      {BAR_OVERLAY_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={(bar.overlayMode ?? 'global') === option.value}
+                          className={`bar-overlay-action ${(bar.overlayMode ?? 'global') === option.value ? 'bar-overlay-action-active' : ''}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            event.preventDefault()
+                            onBarOverlayModeChange(bar.index, option.value)
+                            setOpenOverlayBar(null)
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div className="bar-transfer-wrap">
                   <button
                     type="button"
@@ -309,6 +397,7 @@ export function BarList({
                       event.stopPropagation()
                       event.preventDefault()
                       setOpenActionBar((open) => (open === bar.index ? null : bar.index))
+                      setOpenOverlayBar(null)
                     }}
                   >
                     {'\u21c4'}

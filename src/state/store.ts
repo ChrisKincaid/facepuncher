@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Bar, MixSettings, Project, Take } from '../data/models'
+import type { Bar, BarOverlayMode, GlobalOverlayMode, MixSettings, Project, Take } from '../data/models'
 
 /**
  * A take staged for relocation. Holds the audio's fileId rather than a decoded
@@ -34,6 +34,9 @@ interface StoreState extends UIState {
   setBeatMeta: (meta: { fileId: string; durationSec: number; bpm: number; offsetSec?: number; bar1AnchorTime?: number; timeSig: { beatsPerBar: number; beatUnit: number } }) => void
   setBar1AnchorTime: (timeSec: number) => void
   setBars: (bars: Bar[]) => void
+  setGlobalOverlayDefault: (mode: GlobalOverlayMode) => void
+  resetBarOverlayModesToGlobal: () => void
+  setBarOverlayMode: (barIndex: number, mode: BarOverlayMode) => void
   setAudioUrl: (url?: string) => void
   setBeatFile: (file?: File) => void
   setCurrentBar: (index: number) => void
@@ -65,6 +68,7 @@ const defaultProject: Project = {
   sampleRate: 44100,
   createdAt: new Date().toISOString(),
   latencyOffsetMs: 0,
+  globalOverlayDefault: 'hard_cut',
   beat: {
     fileId: '',
     durationSec: 0,
@@ -81,6 +85,14 @@ const defaultProject: Project = {
   },
 }
 
+function normalizeProject(project: Project): Project {
+  return {
+    ...project,
+    globalOverlayDefault: project.globalOverlayDefault ?? 'hard_cut',
+    bars: project.bars.map((bar) => ({ ...bar, overlayMode: bar.overlayMode ?? 'global' })),
+  }
+}
+
 export const useStore = create<StoreState>((set, get) => ({
   project: defaultProject,
   currentBarIndex: 0,
@@ -95,7 +107,7 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   setProject(project) {
-    set({ project })
+    set({ project: normalizeProject(project) })
   },
 
   setProjectName(name) {
@@ -112,6 +124,28 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setBars(bars) {
     set((state) => ({ project: { ...state.project, bars } }))
+  },
+
+  setGlobalOverlayDefault(mode) {
+    set((state) => ({ project: { ...state.project, globalOverlayDefault: mode } }))
+  },
+
+  resetBarOverlayModesToGlobal() {
+    set((state) => ({
+      project: {
+        ...state.project,
+        bars: state.project.bars.map((bar) => ({ ...bar, overlayMode: 'global' })),
+      },
+    }))
+  },
+
+  setBarOverlayMode(barIndex, mode) {
+    set((state) => ({
+      project: {
+        ...state.project,
+        bars: state.project.bars.map((bar) => bar.index === barIndex ? { ...bar, overlayMode: mode } : bar),
+      },
+    }))
   },
 
   setAudioUrl(url) {

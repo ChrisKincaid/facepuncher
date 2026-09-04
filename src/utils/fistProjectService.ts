@@ -1,11 +1,13 @@
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
-import type { Project, Take } from '../data/models'
+import type { BarOverlayMode, GlobalOverlayMode, Project, Take } from '../data/models'
 import { getBlob, putBlob, saveProject } from '../data/storage'
 
 const MANIFEST_ENTRY = 'project.json'
 const TAKES_DIR = 'takes'
 const FIST_VERSION = 1
+const GLOBAL_OVERLAY_MODES = new Set<GlobalOverlayMode>(['hard_cut', 'natural_decay', 'crossfade', 'ducking'])
+const BAR_OVERLAY_MODES = new Set<BarOverlayMode>(['global', 'hard_cut', 'natural_decay', 'crossfade', 'ducking'])
 
 /** Live settings that sit outside the persisted Project but still define the session. */
 export interface FistSession {
@@ -101,6 +103,7 @@ function coerceProject(raw: unknown): Project {
     sampleRate: Number(source.sampleRate) || 44100,
     createdAt: typeof source.createdAt === 'string' ? source.createdAt : new Date().toISOString(),
     latencyOffsetMs: Number(source.latencyOffsetMs) || 0,
+    globalOverlayDefault: GLOBAL_OVERLAY_MODES.has(source.globalOverlayDefault as GlobalOverlayMode) ? source.globalOverlayDefault as GlobalOverlayMode : 'hard_cut',
     beat: {
       fileId: typeof source.beat.fileId === 'string' ? source.beat.fileId : '',
       durationSec: Number(source.beat.durationSec) || 0,
@@ -118,6 +121,7 @@ function coerceProject(raw: unknown): Project {
       endSec: Number(bar?.endSec) || 0,
       locked: Boolean(bar?.locked),
       section: typeof bar?.section === 'string' ? bar.section : undefined,
+      overlayMode: BAR_OVERLAY_MODES.has(bar?.overlayMode as BarOverlayMode) ? bar.overlayMode as BarOverlayMode : 'global',
     })),
     takes: takes
       .filter((take): take is Take => Boolean(take && typeof take.takeId === 'string' && typeof take.fileId === 'string'))

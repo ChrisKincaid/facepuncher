@@ -2,7 +2,22 @@ export type LatencyCalibrationResult =
   | { status: 'ok'; delayMs: number; peak: number }
   | { status: 'no-signal'; peak: number }
 
+import type { GlobalOverlayMode } from '../data/models'
+
 export type BleedCancelPreset = 'light' | 'standard' | 'heavy'
+
+interface TakePlaybackOptions {
+  overlayMode?: GlobalOverlayMode
+  nextBarOffsetSec?: number
+  nextBarHasTake?: boolean
+  fadeInSec?: number
+}
+
+interface PcmStats {
+  peak: number
+  rms: number
+  nonZeroSamples: number
+}
 
 // Mirror of recorderWorklet.ts as plain JS, used to build the processor from a Blob when
 // the bundled module URL is unavailable. Keep the two in sync if the capture logic changes.
@@ -20,6 +35,10 @@ registerProcessor('recorder-worklet', RecorderWorklet)
 `
 
 export class AudioEngine {
+  private static readonly CROSSFADE_SEC = 0.1
+  private static readonly DUCK_GAIN = 0.5011872336272722
+  private static readonly MAX_CAPTURE_PREPEND_SEC = 30
+
   // Bleed removal tuning. Over-subtraction compensates for the room spreading the
   // bleed's energy beyond the bins the reference occupies; the spectral floor is the
   // fraction of the original magnitude a bin may never fall below. Pushing the floor
@@ -61,6 +80,10 @@ export class AudioEngine {
   private captureDiscontinuityCount = 0
   private captureDiscontinuityGapFrames = 0
   private captureDiscontinuityWarnedThisRecording = false
+  private captureOutOfOrderCount = 0
+  private captureOutOfOrderPrependedFrames = 0
+  private captureOutOfOrderDroppedFrames = 0
+  private captureOutOfOrderWarnedThisRecording = false
   private emptyInputStreak = 0
   private emptyInputSubstitutionCount = 0
   private emptyInputSubstitutionFrames = 0
@@ -258,23 +281,102 @@ export class AudioEngine {
     console.log('[Punchin] beat source started', { contextState: this.ctx.state, offsetSec })
   }
 
-  playTake(buffer: AudioBuffer, offsetSec = 0, gainValue = 1, delaySec = 0) {
+  private makeEqualPowerCurve(gainValue: number, fadeIn: boolean) {
+    const values = new Float32Array(32)
+    for (let i = 0; i < values.length; i++) {
+      const progress = i / (values.length - 1)
+      values[i] = gainValue * (fadeIn ? Math.sin(progress * Math.PI / 2) : Math.cos(progress * Math.PI / 2))
+    }
+    return values
+  }
+
+  private getVocalOutputNode() {
+    if (!this.ctx) return undefined
+    if (!this.masterVocalGain) {
+      this.masterVocalGain = this.ctx.createGain()
+      this.masterVocalGain.connect(this.ctx.destination)
+    }
+    this.masterVocalGain.gain.value = this.vocalMuted ? 0 : this.masterVocalGainValue
+    return this.masterVocalGain
+  }
+
+  private getPcmStats(data: Float32Array): PcmStats {
+    let peak = 0
+    let sum = 0
+    let nonZeroSamples = 0
+    for (let i = 0; i < data.length; i++) {
+      const value = data[i]
+      const abs = Math.abs(value)
+      if (abs > peak) peak = abs
+      if (abs > 0.000001) nonZeroSamples += 1
+      sum += value * value
+    }
+    return { peak, rms: Math.sqrt(sum / Math.max(1, data.length)), nonZeroSamples }
+  }
+
+  private configureTakeEnvelope(source: AudioBufferSourceNode, gain: GainNode, startAt: number, offsetSec: number, durationSec: number, gainValue: number, options: TakePlaybackOptions = {}) {
+    const safeGain = Math.max(0, gainValue)
+    const fadeInSec = Math.max(0, Math.min(options.fadeInSec ?? 0, durationSec))
+    const naturalEndAt = startAt + durationSec
+    const fullGainAt = startAt + Math.max(0.004, fadeInSec)
+    const nextBarStartAt = options.nextBarOffsetSec === undefined ? undefined : startAt - offsetSec + options.nextBarOffsetSec
+    const mode = options.overlayMode ?? 'hard_cut'
+
+    if (mode === 'hard_cut' && nextBarStartAt !== undefined && nextBarStartAt > startAt && nextBarStartAt < naturalEndAt) {
+      gain.gain.value = safeGain
+      try { source.stop(nextBarStartAt) } catch { /* source may already be stopped */ }
+      return
+    }
+
+    gain.gain.setValueAtTime(0, Math.max(0, startAt - 0.001))
+    if (fadeInSec > 0) gain.gain.setValueCurveAtTime(this.makeEqualPowerCurve(safeGain, true), startAt, fadeInSec)
+    else gain.gain.linearRampToValueAtTime(safeGain, startAt + 0.004)
+
+    if (nextBarStartAt !== undefined && nextBarStartAt > startAt && nextBarStartAt < naturalEndAt) {
+      gain.gain.setValueAtTime(safeGain, Math.max(fullGainAt, Math.min(nextBarStartAt, naturalEndAt - 0.001)))
+      if (mode === 'crossfade') {
+        const fadeStart = nextBarStartAt
+        const fadeSec = Math.min(AudioEngine.CROSSFADE_SEC, Math.max(0.01, naturalEndAt - fadeStart))
+        gain.gain.setValueCurveAtTime(this.makeEqualPowerCurve(safeGain, false), fadeStart, fadeSec)
+        try { source.stop(fadeStart + fadeSec) } catch { /* source may already be stopped */ }
+        return
+      }
+      if (mode === 'ducking' && options.nextBarHasTake) {
+        const duckAt = nextBarStartAt + Math.min(0.02, Math.max(0.004, naturalEndAt - nextBarStartAt))
+        gain.gain.linearRampToValueAtTime(safeGain * AudioEngine.DUCK_GAIN, duckAt)
+        gain.gain.setValueAtTime(safeGain * AudioEngine.DUCK_GAIN, Math.max(duckAt, naturalEndAt - 0.008))
+        gain.gain.linearRampToValueAtTime(0, naturalEndAt)
+        return
+      }
+    }
+
+    gain.gain.setValueAtTime(safeGain, Math.max(fullGainAt, naturalEndAt - 0.008))
+    gain.gain.linearRampToValueAtTime(0, naturalEndAt)
+  }
+
+  playTake(buffer: AudioBuffer, offsetSec = 0, gainValue = 1, delaySec = 0, options: TakePlaybackOptions = {}) {
     if (!this.ctx) return
     this.stopTake(0.008)
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     const gain = this.ctx.createGain()
+    gain.gain.value = Number.isFinite(gainValue) ? Math.max(0, gainValue) : 1
     const now = this.ctx.currentTime
     const startAt = now + Math.max(0, delaySec)
     const remaining = Math.max(0.001, buffer.duration - offsetSec)
-    gain.gain.setValueAtTime(0, now)
-    gain.gain.setValueAtTime(0, startAt)
-    gain.gain.linearRampToValueAtTime(gainValue, startAt + 0.004)
-    gain.gain.setValueAtTime(gainValue, startAt + Math.max(0.004, remaining - 0.008))
-    gain.gain.linearRampToValueAtTime(0, startAt + remaining)
-    source.connect(gain).connect(this.masterVocalGain!)
+    this.configureTakeEnvelope(source, gain, startAt, offsetSec, remaining, gainValue, options)
+    const output = this.getVocalOutputNode()
+    if (!output) return
+    source.connect(gain)
+    gain.connect(output)
     this.takeSource = source
     this.takeGain = gain
+    source.onended = () => {
+      source.disconnect()
+      gain.disconnect()
+      if (this.takeSource === source) this.takeSource = undefined
+      if (this.takeGain === gain) this.takeGain = undefined
+    }
     source.start(startAt, Math.max(0, Math.min(offsetSec, Math.max(0, buffer.duration - 0.001))))
     return startAt
   }
@@ -282,14 +384,18 @@ export class AudioEngine {
   // Schedule a take to start at an exact future AudioContext time with no fade in/out.
   // Used to chain a bar's take directly onto the previous bar's, sample-accurately, so a
   // sustained note recorded across two consecutive takes plays back with no seam.
-  scheduleTakeAt(buffer: AudioBuffer, barIndex: number, startAtCtxTime: number, gainValue = 1) {
+  scheduleTakeAt(buffer: AudioBuffer, barIndex: number, startAtCtxTime: number, gainValue = 1, options: TakePlaybackOptions = {}) {
     if (!this.ctx) return
     const source = this.ctx.createBufferSource()
     source.buffer = buffer
     const gain = this.ctx.createGain()
-    gain.gain.value = gainValue
-    source.connect(gain).connect(this.masterVocalGain!)
+    gain.gain.value = Number.isFinite(gainValue) ? Math.max(0, gainValue) : 1
+    const output = this.getVocalOutputNode()
+    if (!output) return
+    source.connect(gain)
+    gain.connect(output)
     const when = Math.max(this.ctx.currentTime, startAtCtxTime)
+    this.configureTakeEnvelope(source, gain, when, 0, Math.max(0.001, buffer.duration), gainValue, options)
     source.start(when, 0)
     this.chainedSources.push({ source, gain, barIndex })
     source.onended = () => {
@@ -604,15 +710,33 @@ export class AudioEngine {
         })
       }
     }
-    const offset = startFrame - this.captureBaseFrame
+    let offset = startFrame - this.captureBaseFrame
     if (offset < 0) {
-      // The main-thread clock used to start a recording/trim (ctx.currentTime) can briefly
-      // disagree with the audio-thread frame counter (e.g. right after the AudioContext
-      // resumes from autoplay-suspended). Never let that push captureBaseFrame ahead of
-      // frames we haven't actually received yet — drop just this one late frame instead of
-      // corrupting the buffer or crashing the message port.
-      console.warn('[Punchin] dropped out-of-order capture frame', { startFrame, captureBaseFrame: this.captureBaseFrame })
-      return
+      const prependFrames = -offset
+      this.captureOutOfOrderCount += 1
+      const maxPrependFrames = this.ctx ? Math.round(this.ctx.sampleRate * AudioEngine.MAX_CAPTURE_PREPEND_SEC) : data.length
+      if (prependFrames <= maxPrependFrames) {
+        const oldLength = this.captureLength
+        const grown = new Float32Array(prependFrames + oldLength)
+        grown.set(this.captureBuffer.subarray(0, oldLength), prependFrames)
+        this.captureBuffer = grown
+        this.captureLength = grown.length
+        this.captureBaseFrame = startFrame
+        this.captureOutOfOrderPrependedFrames += prependFrames
+        offset = 0
+      } else {
+        this.captureOutOfOrderDroppedFrames += data.length
+        if (!this.captureOutOfOrderWarnedThisRecording) {
+          this.captureOutOfOrderWarnedThisRecording = true
+          console.warn('[Punchin] skipped unrecoverably old capture frame', {
+            startFrame,
+            captureBaseFrame: this.captureBaseFrame,
+            prependFrames,
+            maxPrependFrames,
+          })
+        }
+        return
+      }
     }
     const requiredLength = offset + data.length
     if (this.captureBuffer.length < requiredLength) {
@@ -880,9 +1004,14 @@ export class AudioEngine {
     const resolvedStartAt = startAtCtxTime ?? ctx.currentTime
     const startFrame = Math.round(resolvedStartAt * ctx.sampleRate)
     this.activeRecording = { startFrame }
+    this.expectedNextFrame = undefined
     this.captureDiscontinuityCount = 0
     this.captureDiscontinuityGapFrames = 0
     this.captureDiscontinuityWarnedThisRecording = false
+    this.captureOutOfOrderCount = 0
+    this.captureOutOfOrderPrependedFrames = 0
+    this.captureOutOfOrderDroppedFrames = 0
+    this.captureOutOfOrderWarnedThisRecording = false
     this.emptyInputSubstitutionCount = 0
     this.emptyInputSubstitutionFrames = 0
     this.emptyInputSubstitutionWarnedThisRecording = false
@@ -935,13 +1064,36 @@ export class AudioEngine {
       emptyInputSubstitutedFrames: this.emptyInputSubstitutionFrames,
       captureDiscontinuities: this.captureDiscontinuityCount,
       captureDiscontinuityGapFrames: this.captureDiscontinuityGapFrames,
+      captureOutOfOrderFrames: this.captureOutOfOrderCount,
+      captureOutOfOrderPrependedFrames: this.captureOutOfOrderPrependedFrames,
+      captureOutOfOrderDroppedFrames: this.captureOutOfOrderDroppedFrames,
     })
     if (!data.length) {
       console.warn('%c[REC] no frames captured — mic produced nothing', 'color:#c00')
       return undefined
     }
+    const capturedStats = this.getPcmStats(data)
+    if (!capturedStats.nonZeroSamples) {
+      console.warn('%c[REC] captured buffer is silent — refusing to save empty vocal take', 'color:#fff;background:#c00;padding:2px 6px', {
+        frames: data.length,
+        peak: capturedStats.peak,
+        rms: capturedStats.rms,
+        emptyInputSubstitutionEvents: this.emptyInputSubstitutionCount,
+        emptyInputSubstitutedFrames: this.emptyInputSubstitutionFrames,
+      })
+      return undefined
+    }
     const out = this.ctx.createBuffer(1, data.length, sampleRate)
     out.getChannelData(0).set(data)
+    const writtenStats = this.getPcmStats(out.getChannelData(0))
+    if (!writtenStats.nonZeroSamples) {
+      console.warn('%c[REC] AudioBuffer write produced silence', 'color:#fff;background:#c00;padding:2px 6px', {
+        frames: out.length,
+        capturedPeak: capturedStats.peak,
+        capturedRms: capturedStats.rms,
+      })
+      return undefined
+    }
     this.logBufferProfile('TRIMMED TAKE (returned)', out)
     return out
   }
