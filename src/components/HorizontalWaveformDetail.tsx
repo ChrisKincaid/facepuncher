@@ -13,6 +13,8 @@ interface Props {
   loopRange?: { start: number; end: number }
   onLoopRangeChange: (start: number, end: number) => void
   onSeek: (time: number) => void
+  transportMode?: boolean
+  getPlaybackTime?: () => number
 }
 
 /**
@@ -36,6 +38,8 @@ export function HorizontalWaveformDetail({
   loopRange,
   onLoopRangeChange,
   onSeek,
+  transportMode = false,
+  getPlaybackTime,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const channelDataRef = useRef<Float32Array | null>(null)
@@ -57,6 +61,8 @@ export function HorizontalWaveformDetail({
   const loopEnabledRef = useRef(loopEnabled)
   const loopRangeRef = useRef(loopRange)
   const totalDurationRef = useRef(totalDuration)
+  const transportModeRef = useRef(transportMode)
+  const getPlaybackTimeRef = useRef(getPlaybackTime)
   useLayoutEffect(() => {
     zoomRef.current = zoom
     viewCenterRef.current = viewCenter
@@ -68,7 +74,9 @@ export function HorizontalWaveformDetail({
     loopEnabledRef.current = loopEnabled
     loopRangeRef.current = loopRange
     totalDurationRef.current = totalDuration
-  }, [bars, currentBarIndex, cursor, isPlaying, loopEnabled, loopRange, playhead, totalDuration, viewCenter, zoom])
+    transportModeRef.current = transportMode
+    getPlaybackTimeRef.current = getPlaybackTime
+  }, [bars, currentBarIndex, cursor, getPlaybackTime, isPlaying, loopEnabled, loopRange, playhead, totalDuration, transportMode, viewCenter, zoom])
 
   // DPR ref for draw function
   const dprRef = useRef(1)
@@ -85,6 +93,17 @@ export function HorizontalWaveformDetail({
   /** Get visible time window */
   function getView(): { vs: number; ve: number } {
     const dur = totalDurationRef.current
+    const visibleBars = barsRef.current
+    if (transportModeRef.current && visibleBars.length) {
+      const position = isPlayingRef.current ? cursorRef.current : playheadRef.current
+      const detectedIndex = visibleBars.findIndex((bar) => position >= bar.startSec && position < bar.endSec)
+      const activeIndex = Math.max(0, Math.min(detectedIndex >= 0 ? detectedIndex : currentBarIndexRef.current, visibleBars.length - 1))
+      const first = visibleBars[Math.max(0, activeIndex - 1)]
+      const last = visibleBars[Math.min(visibleBars.length - 1, activeIndex + 2)]
+      const span = Math.max(last.endSec - first.startSec, visibleBars[activeIndex].endSec - visibleBars[activeIndex].startSec)
+      const center = Math.max(span / 2, Math.min(dur - span / 2, position))
+      return { vs: center - span / 2, ve: center + span / 2 }
+    }
     const z = zoomRef.current
     const center = viewCenterRef.current
     if (!dur || z <= 1) return { vs: 0, ve: dur || 1 }
@@ -154,7 +173,7 @@ export function HorizontalWaveformDetail({
       ctx.fillRect(x1, 0, x2 - x1, h)
     }
 
-    // Bar grid lines + labels
+    // Bar grid lines and transport-specific bar labels.
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'
     ctx.lineWidth = 1
     const fontSize = Math.round(5 * dprRef.current)
@@ -162,11 +181,39 @@ export function HorizontalWaveformDetail({
     ctx.fillStyle = 'rgba(160,163,177,0.6)'
     for (const bar of _bars) {
       if (bar.startSec < vs - span * 0.1 || bar.startSec > ve + span * 0.1) continue
-      const x = Math.round(((bar.startSec - vs) / span) * w) + 0.5
+      const x = ((bar.startSec - vs) / span) * w
+      const isAtPlayhead = transportModeRef.current && Math.abs(x - w / 2) <= Math.max(3, 2 * dprRef.current)
+      if (isAtPlayhead) {
+        ctx.save()
+        ctx.strokeStyle = '#f6c177'
+        ctx.lineWidth = Math.max(1.5, dprRef.current)
+        ctx.shadowColor = 'rgba(246,193,119,0.9)'
+        ctx.shadowBlur = 5 * dprRef.current
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke()
+        ctx.restore()
+      }
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke()
-      const labelX = x + 3
-      if (labelX > 0 && labelX < w - 20) {
-        ctx.fillText(`${bar.index + 1}`, labelX, fontSize + 1)
+      if (transportModeRef.current) {
+        const labelX = x + Math.max(3, 3 * dprRef.current)
+        if (labelX > 0 && labelX < w) {
+          const transportFontSize = Math.round(20 * dprRef.current)
+          ctx.save()
+          ctx.font = `bold ${transportFontSize}px monospace`
+          ctx.fillStyle = isAtPlayhead ? '#f6c177' : 'rgba(231,233,241,0.42)'
+          if (isAtPlayhead) {
+            ctx.shadowColor = 'rgba(246,193,119,0.75)'
+            ctx.shadowBlur = 4 * dprRef.current
+          }
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(`${bar.index + 1}`, labelX, h * 0.32)
+          ctx.restore()
+        }
+      } else {
+        const labelX = x + 3
+        if (labelX > 0 && labelX < w - 20) {
+          ctx.fillText(`${bar.index + 1}`, labelX, fontSize + 1)
+        }
       }
     }
 
@@ -269,8 +316,8 @@ export function HorizontalWaveformDetail({
         ctx.fillRect(x1, 0, x2 - x1, h)
 
         ctx.fillStyle = '#4dd0e1'
-        ctx.fillRect(Math.round(x1) - 1, 0, 1.5, h)
-        ctx.fillRect(Math.round(x2) - 1, 0, 1.5, h)
+        ctx.fillRect(x1 - 0.75, 0, 1.5, h)
+        ctx.fillRect(x2 - 0.75, 0, 1.5, h)
       }
     }
 
@@ -282,7 +329,7 @@ export function HorizontalWaveformDetail({
     // Render one position marker. During playback it is driven only by the
     // live audio cursor; while stopped it shows the stored seek position.
     const position = _isPlaying ? _cursor : _playhead
-    const px = ((position - vs) / span) * w
+    const px = transportModeRef.current && _bars.length ? w / 2 : ((position - vs) / span) * w
     if (px >= -2 && px <= w + 2) {
       ctx.save()
       ctx.shadowColor = _isPlaying ? 'rgba(255,255,255,0.6)' : 'transparent'
@@ -309,6 +356,18 @@ export function HorizontalWaveformDetail({
       ctx.setLineDash([2, 2])
       ctx.beginPath(); ctx.moveTo(_hoverX, 0); ctx.lineTo(_hoverX, h); ctx.stroke()
       ctx.setLineDash([])
+    }
+
+    if (transportModeRef.current) {
+      const progress = Math.max(0, Math.min(1, position / _dur))
+      const progressY = h - Math.max(2, Math.round(1.5 * dprRef.current))
+      ctx.fillStyle = 'rgba(255,255,255,0.18)'
+      ctx.fillRect(0, progressY, w, h - progressY)
+      ctx.fillStyle = '#f6c177'
+      ctx.fillRect(0, progressY, w * progress, h - progressY)
+      ctx.beginPath()
+      ctx.arc(w * progress, progressY, Math.max(1.5, dprRef.current * 1.5), 0, Math.PI * 2)
+      ctx.fill()
     }
 
     // Zoom level indicator
@@ -388,6 +447,7 @@ export function HorizontalWaveformDetail({
   // Only re-center if playhead is outside the visible range — this prevents
   // nudge buttons from jarring the view when the marker is already on-screen.
   useEffect(() => {
+    if (transportMode) return
     if (zoom <= 1) return
     const { vs, ve } = getView()
     const margin = (ve - vs) * 0.05 // 5% margin
@@ -395,14 +455,30 @@ export function HorizontalWaveformDetail({
       const frame = window.requestAnimationFrame(() => setViewCenter(playhead))
       return () => window.cancelAnimationFrame(frame)
     }
-  }, [playhead, zoom])
+  }, [playhead, transportMode, zoom])
 
   // Center view on cursor during playback (only when zoomed in)
   useEffect(() => {
+    if (transportMode) return
     if (!isPlaying || zoom <= 1) return
     const frame = window.requestAnimationFrame(() => setViewCenter(cursor))
     return () => window.cancelAnimationFrame(frame)
-  }, [cursor, isPlaying, zoom])
+  }, [cursor, isPlaying, transportMode, zoom])
+
+  // The compact transport renders from the audio clock, not React's cursor updates.
+  // This keeps the four-bar window moving smoothly even when the rest of the UI rerenders.
+  useEffect(() => {
+    if (!transportMode || !isPlaying) return
+    let frame = 0
+    const renderFrame = () => {
+      const position = getPlaybackTimeRef.current?.()
+      if (position !== undefined) cursorRef.current = position
+      draw()
+      frame = window.requestAnimationFrame(renderFrame)
+    }
+    frame = window.requestAnimationFrame(renderFrame)
+    return () => window.cancelAnimationFrame(frame)
+  }, [draw, isPlaying, transportMode])
 
   // Redraw before the browser paints so stop/seek never shows the prior marker.
   useLayoutEffect(() => {
@@ -487,6 +563,7 @@ export function HorizontalWaveformDetail({
 
   // Scroll wheel zoom — smooth, centered on mouse position
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (transportMode) return
     e.preventDefault()
     const mouseTime = xToTime(e.clientX)
     setZoom(prev => {
@@ -503,12 +580,12 @@ export function HorizontalWaveformDetail({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
-    const handle = getLoopHandleAt(e.clientX)
+    const handle = transportMode ? undefined : getLoopHandleAt(e.clientX)
     pointerDragRef.current = {
       pointerId: e.pointerId,
       startX: e.clientX,
       startTime: xToTime(e.clientX),
-      mode: handle === 'start' ? 'start-handle' : handle === 'end' ? 'end-handle' : isNearPlayhead(e.clientX) ? 'playhead' : 'select',
+      mode: transportMode ? 'playhead' : handle === 'start' ? 'start-handle' : handle === 'end' ? 'end-handle' : isNearPlayhead(e.clientX) ? 'playhead' : 'select',
       moved: false,
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -521,6 +598,10 @@ export function HorizontalWaveformDetail({
     if (drag?.pointerId === e.pointerId) {
       if (Math.abs(e.clientX - drag.startX) > 4) drag.moved = true
       if (drag.moved) {
+        if (transportMode) {
+          onSeek(xToTime(e.clientX))
+          return
+        }
         const boundary = nearestBoundary(xToTime(e.clientX))
         if (drag.mode === 'playhead') onSeek(xToTime(e.clientX))
         else if (drag.mode === 'select') setLoopFromBoundaries(nearestBoundary(drag.startTime), boundary)
@@ -538,7 +619,7 @@ export function HorizontalWaveformDetail({
     hoverXRef.current = ((e.clientX - rect.left) / rect.width) * canvas.width
     draw()
 
-    if (getLoopHandleAt(e.clientX) || isNearPlayhead(e.clientX)) {
+    if (!transportMode && (getLoopHandleAt(e.clientX) || isNearPlayhead(e.clientX))) {
       canvas.style.cursor = 'ew-resize'
     } else {
       canvas.style.cursor = 'crosshair'
@@ -561,13 +642,13 @@ export function HorizontalWaveformDetail({
     <div className="hz-waveform-wrap">
       <canvas
         ref={canvasRef}
-        onWheel={handleWheel}
+        onWheel={transportMode ? undefined : handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={() => { pointerDragRef.current = null }}
         onMouseLeave={handleMouseLeave}
-        title="Click to set play position · drag to set loop range · drag cyan handles to adjust loop bounds"
+        title={transportMode ? 'Drag to scrub playback position' : 'Click to set play position · drag to set loop range · drag cyan handles to adjust loop bounds'}
         style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
       />
     </div>

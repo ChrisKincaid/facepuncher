@@ -29,7 +29,7 @@ const UNDO_WINDOW_SEC = 6
 const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180
 
-type HelpTopic = 'volume' | 'project' | 'setup' | 'bars'
+type HelpTopic = 'volume' | 'project' | 'setup' | 'bars' | 'bar-boundaries' | 'vocal-timing' | 'bleed-control'
 
 const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; text: string }[] }> = {
   volume: {
@@ -73,6 +73,29 @@ const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; 
       { term: 'Actions', text: 'The ⇄ button on a bar opens Copy, Cut, and Delete. Copying or cutting a take activates cyan PASTE buttons across every valid destination bar.' },
       { term: 'Drag & Drop', text: 'Drag a take onto another bar to move it. Bars already holding 5 takes will refuse the drop.' },
       { term: 'Favorite / Lock', text: 'Star your best takes to lock them in place, protecting them while you record new passes.' },
+    ],
+  },
+  'bar-boundaries': {
+    title: 'Bar Boundary Alignment',
+    entries: [
+      { term: 'Why it matters:', text: '• Keeps your beat locked in time from start to finish.\n• If your BPM is off even a tiny bit, the song will drift out of sync as it plays.' },
+      { term: 'Best practices:', text: '• If you know the exact BPM, type it in first for the best match.\n• Tap Tempo is a backup tool when you are guessing.\n• Works best with steady, fixed-tempo beats (not live jazz or fluid tempos).' },
+    ],
+  },
+  'vocal-timing': {
+    title: 'Vocal Timing & Latency',
+    entries: [
+      { term: 'Why vocals get delayed:', text: '• Every phone, mic, and computer takes a split second to process sound.' },
+      { term: 'How to auto-fix it:', text: "• Tap 'Calibrate Mic Timing' while playing sound through your speakers.\n• Hold your mic close to the speaker and stay quiet—bumps or room noise mess up the test!" },
+      { term: 'Manual adjustments:', text: '• Use the Nudge buttons to slide your vocal forward or backward until it sounds tight.\n• Important: Use wired headphones! Bluetooth adds too much delay to fix.' },
+    ],
+  },
+  'bleed-control': {
+    title: 'Bleed Control',
+    entries: [
+      { term: 'What it does:', text: '• Uses phase subtraction to reduce beat audio leaking into your mic.' },
+      { term: 'Speaker vs. Headphone Reality:', text: '• Headphones: Essential for clean recordings and leak-free vocals.\n• Open Speakers: Will bake the background beat into your vocal track. High volume can overwhelm cancellation, causing weird artifacts or clashes when moving takes around.' },
+      { term: 'How to get the cleanest sound:', text: '• Phones & speakers are fine for quick, off-the-cuff scratch ideas.\n• For studio-quality mixes and punch-ins, use closed-back headphones.\n• Higher settings strip more leak, but can slightly alter vocal tone.' },
     ],
   },
 }
@@ -161,6 +184,7 @@ export default function App() {
   const vocalSyncMsRef = useRef(project.latencyOffsetMs)
   const playheadRef = useRef(0)
   const cursorRef = useRef(0)
+  const lastCursorPublishRef = useRef(0)
   const [monitorEnabled, setMonitorEnabled] = useState(false)
   const [monitorGain, setMonitorGain] = useState(0.8)
   const [metronomeEnabled, setMetronomeEnabled] = useState(false)
@@ -179,28 +203,11 @@ export default function App() {
   const [detectBusy, setDetectBusy] = useState(false)
   const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null)
-  const [showSetup, setShowSetup] = useState(true)
-  const [showProject, setShowProject] = useState(false)
+  const [showSetup, setShowSetup] = useState(false)
+  const [showProject, setShowProject] = useState(true)
   const [showVolume, setShowVolume] = useState(false)
   const [showBars, setShowBars] = useState(false)
   const [barsOnly, setBarsOnly] = useState(false)
-  const [isMobileLayout, setIsMobileLayout] = useState(() => window.matchMedia('(max-width: 768px)').matches)
-
-  useEffect(() => {
-    const query = window.matchMedia('(max-width: 768px)')
-    const sync = (event: MediaQueryListEvent) => {
-      setIsMobileLayout(event.matches)
-      if (event.matches) {
-        setShowVolume(false)
-        setShowProject(false)
-        setShowSetup(true)
-        setShowBars(false)
-        setBarsOnly(false)
-      }
-    }
-    query.addEventListener('change', sync)
-    return () => query.removeEventListener('change', sync)
-  }, [])
 
   // Exactly one workspace section can occupy the available vertical space at a time.
   const toggleAccordionPanel = (panel: 'volume' | 'setup' | 'project' | 'bars') => {
@@ -266,7 +273,7 @@ export default function App() {
     setShowVolume(false)
     setShowSetup(false)
     setShowBars(false)
-  }, [audioLoaded, isMobileLayout])
+  }, [audioLoaded])
 
   useEffect(() => {
     vocalSyncMsRef.current = project.latencyOffsetMs
@@ -374,6 +381,7 @@ export default function App() {
           })
         }
       }
+      let displayCursor = raw
       if (loopEnabled && loopRange && project.bars[loopRange.start] && project.bars[loopRange.end]) {
         const loopStart = project.bars[loopRange.start].startSec
         const loopEnd = project.bars[loopRange.end].endSec
@@ -381,9 +389,14 @@ export default function App() {
         // The source can start before the selected loop. Keep the cursor at
         // the true file position until playback reaches the loop start; only
         // wrap after the audio has passed the loop end.
-        setCursor(raw < loopStart ? raw : loopStart + ((raw - loopStart) % span + span) % span)
-      } else {
-        setCursor(raw)
+        displayCursor = raw < loopStart ? raw : loopStart + ((raw - loopStart) % span + span) % span
+      }
+      // Keep application state light: the transport canvas reads the audio clock directly
+      // every frame, while the rest of the UI only needs a modest refresh cadence.
+      const now = performance.now()
+      if (now - lastCursorPublishRef.current >= 50) {
+        lastCursorPublishRef.current = now
+        setCursor(displayCursor)
       }
       frame = window.requestAnimationFrame(updateCursor)
     }
@@ -1315,6 +1328,12 @@ export default function App() {
     }, durationMs)
   }
 
+  const openSubsectionHelp = (event: React.MouseEvent<HTMLElement>, topic: HelpTopic) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setHelpTopic(topic)
+  }
+
   const handleExportProject = async () => {
     if (isExportingProject) return
     if (isPlayingRef.current) handlePause()
@@ -1469,7 +1488,7 @@ export default function App() {
   }
 
   const enterBarsOnlyMode = () => {
-    if (!isMobileLayout || !audioLoaded) return
+    if (!audioLoaded) return
     setBarsOnly(true)
     setShowVolume(false)
     setShowSetup(false)
@@ -1486,7 +1505,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app-layout ${audioLoaded ? 'has-audio-loaded' : ''} ${isMobileLayout && audioLoaded && barsOnly ? 'mobile-bars-only' : ''}`}>
+    <div className={`app-layout ${audioLoaded ? 'has-audio-loaded' : ''} ${audioLoaded && barsOnly ? 'mobile-bars-only' : ''}`}>
       <div className="app-main">
         <div className="shell">
           <div className="app-title-block">
@@ -1571,6 +1590,8 @@ export default function App() {
             loopRange={loopRange}
             onLoopRangeChange={handleLoopChange}
             onSeek={handleSeek}
+            transportMode
+            getPlaybackTime={() => audioEngine.currentTime}
           />
         </div>
         <div className="playback-play-group">
@@ -1602,7 +1623,7 @@ export default function App() {
         </div>
         </div>
 
-        <section className={`panel volume-panel section-collapsible ${showVolume ? '' : 'is-collapsed'}`}>
+        <section className={`panel volume-panel section-collapsible accordion-panel ${showVolume ? '' : 'is-collapsed'}`}>
         <div className="section-body">
         <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showVolume} {...sectionActionHandlers(() => toggleAccordionPanel('volume'))}>
           <span className="collapsible-title">Volume</span>
@@ -1656,7 +1677,7 @@ export default function App() {
         </div>
         </section>
 
-          <section className={`panel project-export-panel section-collapsible ${showProject ? '' : 'is-collapsed'}`}>
+          <section className={`panel project-export-panel section-collapsible accordion-panel ${showProject ? '' : 'is-collapsed'}`}>
             <div className="section-body">
             <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showProject} {...sectionActionHandlers(() => toggleAccordionPanel('project'))}>
               <span className="collapsible-title">Import / Export</span>
@@ -1805,7 +1826,7 @@ export default function App() {
             </div>
           )}
 
-          <section className={`setup-stack section-collapsible ${showSetup ? '' : 'setup-stack-collapsed is-collapsed'}`}>
+          <section className={`setup-stack section-collapsible accordion-panel ${showSetup ? '' : 'setup-stack-collapsed is-collapsed'}`}>
           <div className="section-body">
           {/* Outside the showSetup branch so the title and its help stay reachable while collapsed. */}
           <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showSetup} {...sectionActionHandlers(() => toggleAccordionPanel('setup'))}>
@@ -1909,38 +1930,11 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="beat-setup-group beat-setup-dsp-group">
-                <button
-                  type="button"
-                  className={`beat-setup-bleed-cancel ${bleedCancelEnabled ? 'loop-toggle-on' : 'secondary'}`}
-                  aria-pressed={bleedCancelEnabled}
-                  onClick={() => setBleedCancelEnabled((enabled) => !enabled)}
-                  title={bleedCancelEnabled
-                    ? 'Bleed Cancellation on — new takes subtract speaker leakage'
-                    : 'Bleed Cancellation off — record the raw mic signal'}
-                >
-                  Bleed Cancel
-                </button>
-                <div className="bleed-preset-group" role="group" aria-label="Bleed cancellation strength">
-                {([
-                  { id: 'light', label: 'Light', hint: 'Gentlest — preserves vocal tails, least pumping' },
-                  { id: 'standard', label: 'Standard', hint: 'Balanced drum and bass bleed reduction' },
-                  { id: 'heavy', label: 'Heavy', hint: 'Maximum isolation for sparse, drum-heavy beats' },
-                ] as const).map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={`bleed-preset-button ${bleedCancelPreset === option.id ? 'bleed-preset-active' : 'secondary'}`}
-                    aria-pressed={bleedCancelPreset === option.id}
-                    title={option.hint}
-                    onClick={() => setBleedCancelPreset(option.id)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-                </div>
-              </div>
             </div>
+          <div className="beat-setup-subsection-header">
+            <span>Bar Boundary Alignment</span>
+            <button type="button" className="section-help-button" aria-label="Explain Bar Boundary Alignment" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => openSubsectionHelp(event, 'bar-boundaries')}>?</button>
+          </div>
           <div className="beat-setup-anchor">
             {audioEngine.beatAudioBuffer && (
               <BarWaveformEditor
@@ -1955,7 +1949,6 @@ export default function App() {
                 anchorOnly
                 quickLoopControl={(
                   <div className="quick-loop-group" onClick={(event) => event.stopPropagation()}>
-                    <span className="bwe-ctrl-label">Loop</span>
                     {([0, 1, 2, 4] as const).map((bars) => (
                       <button
                         key={bars}
@@ -1975,6 +1968,10 @@ export default function App() {
             {!audioEngine.beatAudioBuffer && (
               <span className="text-muted">Load a beat to align Bar 1.</span>
             )}
+          </div>
+          <div className="beat-setup-subsection-header">
+            <span>Vocal Timing</span>
+            <button type="button" className="section-help-button" aria-label="Explain Vocal Timing" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => openSubsectionHelp(event, 'vocal-timing')}>?</button>
           </div>
           <div className="beat-setup-sync">
               <div className="controls playback-sync-controls">
@@ -2025,6 +2022,41 @@ export default function App() {
                 </div>
               </div>
           </div>
+          <div className="beat-setup-subsection-header">
+            <span>{'\u{1F399}'} Bleed Control</span>
+            <button type="button" className="section-help-button" aria-label="Explain Bleed Control" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => openSubsectionHelp(event, 'bleed-control')}>?</button>
+          </div>
+          <div className="beat-setup-group beat-setup-dsp-group">
+            <button
+              type="button"
+              className={`beat-setup-bleed-cancel ${bleedCancelEnabled ? 'loop-toggle-on' : 'secondary'}`}
+              aria-pressed={bleedCancelEnabled}
+              onClick={() => setBleedCancelEnabled((enabled) => !enabled)}
+              title={bleedCancelEnabled
+                ? 'Bleed Cancellation on — new takes subtract speaker leakage'
+                : 'Bleed Cancellation off — record the raw mic signal'}
+            >
+              Bleed Cancel
+            </button>
+            <div className="bleed-preset-group" role="group" aria-label="Bleed cancellation strength">
+            {([
+              { id: 'light', label: 'Light', hint: 'Gentlest — preserves vocal tails, least pumping' },
+              { id: 'standard', label: 'Standard', hint: 'Balanced drum and bass bleed reduction' },
+              { id: 'heavy', label: 'Heavy', hint: 'Maximum isolation for sparse, drum-heavy beats' },
+            ] as const).map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={`bleed-preset-button ${bleedCancelPreset === option.id ? 'bleed-preset-active' : 'secondary'}`}
+                aria-pressed={bleedCancelPreset === option.id}
+                title={option.hint}
+                onClick={() => setBleedCancelPreset(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+            </div>
+          </div>
           </section>
           </>}
           </div>
@@ -2040,6 +2072,7 @@ export default function App() {
             loopRange={loopRange}
             currentBarIndex={currentBarIndex}
             isRecording={isRecording}
+            isVocalMuted={isVocalMuted}
             takes={project.takes}
             armedTakeByBar={armedTakeByBar}
             auditioningTakeId={auditioningTakeId}
@@ -2088,6 +2121,11 @@ export default function App() {
             onToggleFocus={barsOnly ? exitBarsOnlyMode : enterBarsOnlyMode}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
+            onToggleVocalMute={() => {
+              const nextMuted = !isVocalMuted
+              audioEngine.setMasterVocalMuted(nextMuted)
+              setVocalMuted(nextMuted)
+            }}
           />}
         </div>
       </div>

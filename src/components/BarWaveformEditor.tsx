@@ -465,7 +465,6 @@ export function BarWaveformEditor(props: Props) {
               <option value="zero-crossing">Zero crossing</option>
             </select>
           </label>
-          {props.quickLoopControl}
           {!props.anchorOnly && <>
             <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
               <input
@@ -501,9 +500,14 @@ export function BarWaveformEditor(props: Props) {
           </div>
         )}
 
+        {props.quickLoopControl && (
+          <div className="bwe-loop-row">
+            {props.quickLoopControl}
+          </div>
+        )}
+
         {/* ── zoom row ── */}
-        <div className="bwe-ctrl-row">
-          <span className="bwe-ctrl-label">Zoom</span>
+        <div className="bwe-ctrl-row bwe-zoom-row">
           {!props.anchorOnly && <label className="bwe-ctrl-label flex-gap" onClick={(e) => e.stopPropagation()}>
               Center
               <select

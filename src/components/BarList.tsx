@@ -16,6 +16,7 @@ interface Props {
   loopRange?: { start: number; end: number }
   currentBarIndex: number
   isRecording: boolean
+  isVocalMuted: boolean
   takes: Take[]
   armedTakeByBar: Record<number, number[]>
   auditioningTakeId?: string
@@ -40,6 +41,7 @@ interface Props {
   onShowHelp: () => void
   onFocusBar: (barIndex: number) => void
   onTakeGain: (takeId: string, value: number) => void
+  onToggleVocalMute: () => void
 }
 
 export function BarList({
@@ -52,6 +54,7 @@ export function BarList({
   loopRange,
   currentBarIndex,
   isRecording,
+  isVocalMuted,
   takes,
   armedTakeByBar,
   auditioningTakeId,
@@ -76,6 +79,7 @@ export function BarList({
   onShowHelp,
   onFocusBar,
   onTakeGain,
+  onToggleVocalMute,
 }: Props) {
   const [barScale, setBarScale] = useState<BarScale>(2)
   const [openActionBar, setOpenActionBar] = useState<number | null>(null)
@@ -100,8 +104,14 @@ export function BarList({
     }, 1600)
   }
 
+  const availableBars = bars.filter((bar) => {
+    const takeCount = takes.filter((take) => take.barIndex === bar.index).length
+    return takeCount + (armedTakeByBar[bar.index]?.length ?? 0) < 5
+  })
+  const allAvailableBarsArmed = availableBars.length > 0 && availableBars.every((bar) => (armedTakeByBar[bar.index]?.length ?? 0) > 0)
+
   return (
-    <div className={`panel bar-list-panel ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
+    <div className={`panel bar-list-panel accordion-panel ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
       <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={expanded} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); onToggleSection() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggleSection() } }} style={{ marginBottom: expanded ? 6 : 0 }}>
         <div className="bars-header-title">
           <span className="collapsible-title">Bars</span>
@@ -116,53 +126,59 @@ export function BarList({
             ?
           </button>
         </div>
-        {expanded && bars.length > 0 && (
-        <div className="bar-scale-controls" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-          <button
-            type="button"
-            className={`secondary bar-focus-button ${focusMode ? 'bar-focus-on' : ''}`}
-            aria-pressed={focusMode}
-            title={focusMode ? 'Reopen the sections above' : 'Collapse the sections above to focus on bars'}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              onToggleFocus()
-            }}
-          >
-            {focusMode ? 'Show Settings' : 'Bars Only'}
-          </button>
-          <button
-            type="button"
-            className="secondary bar-delete-all"
-            disabled={!takes.length}
-            title="Delete all takes across every bar"
-            onClick={onDeleteAllTakes}
-          >
-            Delete All Takes
-          </button>
-          <span className="bar-header-divider" aria-hidden="true" />
-          <span className="bar-scale-label">Bar Height</span>
-          <button
-            type="button"
-            className={`secondary bar-scale-button ${barScale === 1 ? 'bar-scale-disabled' : ''}`}
-            aria-label="Shorter bar rows"
-            title="Shorter bar rows"
-            onClick={() => setBarScale((scale) => (scale === 4 ? 2 : 1))}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className={`secondary bar-scale-button ${barScale === 4 ? 'bar-scale-disabled' : ''}`}
-            aria-label="Taller bar rows"
-            title="Taller bar rows"
-            onClick={() => setBarScale((scale) => (scale === 1 ? 2 : 4))}
-          >
-            +
-          </button>
+      </div>
+      {expanded && bars.length > 0 && (
+        <div className="bars-toolbar" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <div className="bars-toolbar-top-row">
+            <button
+              type="button"
+              className={`secondary bar-focus-button bars-toolbar-mode ${focusMode ? 'bar-focus-on' : ''}`}
+              aria-pressed={focusMode}
+              title={focusMode ? 'Reopen the sections above' : 'Collapse the sections above to focus on bars'}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onToggleFocus()
+              }}
+            >
+              {focusMode ? 'Show Settings' : 'Bars Only'}
+            </button>
+            <div className="bars-toolbar-zoom" aria-label="Bar row zoom">
+              <button type="button" className={`secondary bar-scale-button ${barScale === 1 ? 'bar-scale-disabled' : ''}`} aria-label="Zoom out" onClick={() => setBarScale((scale) => (scale === 4 ? 2 : 1))}>−</button>
+              <span className="bar-scale-label">Zoom</span>
+              <button type="button" className={`secondary bar-scale-button ${barScale === 4 ? 'bar-scale-disabled' : ''}`} aria-label="Zoom in" onClick={() => setBarScale((scale) => (scale === 1 ? 2 : 4))}>+</button>
+            </div>
+          </div>
+          <div className="bars-toolbar-actions">
+            <button type="button" className="secondary" onClick={onToggleVocalMute} aria-pressed={isVocalMuted}>
+              {isVocalMuted ? 'Unmute All' : 'Mute All'}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!availableBars.length}
+              onClick={() => {
+                if (allAvailableBarsArmed) availableBars.forEach((bar) => onDisarmTake(bar.index))
+                else availableBars.forEach((bar) => {
+                  const takeCount = takes.filter((take) => take.barIndex === bar.index).length
+                  onArmTake(bar.index, takeCount + (armedTakeByBar[bar.index]?.length ?? 0))
+                })
+              }}
+            >
+              {allAvailableBarsArmed ? 'Unarm All' : 'Arm All'}
+            </button>
+            <button
+              type="button"
+              className="bar-delete-all bars-toolbar-delete"
+              disabled={!takes.length}
+              title="Delete all takes across every bar"
+              onClick={onDeleteAllTakes}
+            >
+              Delete All Takes
+            </button>
+          </div>
         </div>
         )}
-      </div>
 
       {expanded && (!bars.length ? (
         <div className="workspace-empty-state" role="status">

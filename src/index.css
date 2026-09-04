@@ -381,6 +381,34 @@ body {
   cursor: pointer;
 }
 
+.accordion-panel > .collapsible-header,
+.accordion-panel > .section-body > .collapsible-header {
+  display: flex;
+  align-self: stretch;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 5px 8px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(160, 163, 177, 0.28);
+  border-radius: 4px;
+}
+
+.accordion-panel:not(.is-collapsed) > .collapsible-header,
+.accordion-panel:not(.is-collapsed) > .section-body > .collapsible-header {
+  background: rgba(77, 208, 225, 0.1);
+  border-color: rgba(77, 208, 225, 0.65);
+  box-shadow: 0 0 8px rgba(77, 208, 225, 0.14);
+}
+
+.accordion-panel > .collapsible-header .collapsible-title,
+.accordion-panel > .section-body > .collapsible-header .collapsible-title {
+  color: var(--text);
+  font-size: 6.5px;
+}
+
 .bars-header-title {
   display: flex;
   align-items: center;
@@ -617,10 +645,13 @@ body {
 
 .shell {
   width: 100%;
+  height: 100%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
   gap: 4px;
 }
 
@@ -638,6 +669,81 @@ body {
 
 .bar-list-panel.is-collapsed {
   flex: 0 0 auto;
+}
+
+/* Every standard accordion peer keeps its header in the fixed shell. The one active
+   peer receives the remaining height and scrolls only its own content. */
+.accordion-panel {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 6px 8px;
+}
+
+/* Override legacy per-section panel gutters so each accordion header uses the
+   same outer column width in both its collapsed and expanded states. */
+.accordion-panel.volume-panel,
+.accordion-panel.project-export-panel,
+.accordion-panel.bar-list-panel {
+  padding: 6px 8px;
+}
+
+.accordion-panel.is-collapsed {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.accordion-panel.is-collapsed .section-body {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.accordion-panel .collapsible-header {
+  flex: 0 0 auto;
+}
+
+.bar-list-panel.is-expanded {
+  flex: 1 1 auto;
+}
+
+.accordion-panel:not(.is-collapsed):not(.bar-list-panel) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.accordion-panel:not(.is-collapsed):not(.bar-list-panel) .section-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.accordion-panel:not(.is-collapsed):not(.bar-list-panel) .collapsible-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  background: var(--panel);
+}
+
+.mobile-bars-only .app-title-block,
+.mobile-bars-only .volume-panel,
+.mobile-bars-only .project-export-panel,
+.mobile-bars-only .setup-stack {
+  display: none;
+}
+
+.app-layout:not(.has-audio-loaded) .playback-controls-panel {
+  display: none;
 }
 
 .app-title-block {
@@ -757,6 +863,26 @@ body {
   min-height: 20px;
   padding-right: 40px;
   padding-left: 40px;
+}
+
+/* Main accordion sections must keep the same full-width header box whether their
+   body is open or collapsed. This follows the legacy collapsed rule intentionally. */
+.section-collapsible.accordion-panel.is-collapsed {
+  padding-right: 8px;
+}
+
+.section-collapsible.accordion-panel.is-collapsed .section-body {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
+.section-collapsible.accordion-panel .collapsible-header {
+  width: 100% !important;
+  max-width: none !important;
+  box-sizing: border-box;
+  margin: 0;
 }
 
 .section-collapsed-bar {
@@ -1183,7 +1309,7 @@ button {
   color: #041014;
   border: none;
   border-radius: 4px;
-  padding: 2.5px 6px;
+  padding: 2px 6px;
   cursor: pointer;
   font-weight: 600;
   transition: transform 0.05s ease, box-shadow 0.1s ease;
@@ -1356,6 +1482,60 @@ input[type='file'] {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.bars-toolbar {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.bars-toolbar-top-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.bars-toolbar-mode,
+.bars-toolbar-delete {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.bars-toolbar-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.bars-toolbar-actions button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 6px;
+}
+
+.bars-toolbar-delete {
+  min-width: 0;
+  color: var(--danger);
+  border-color: rgba(255, 107, 107, 0.7);
+  background: rgba(255, 107, 107, 0.08);
+}
+
+.bars-toolbar-zoom {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.bars-toolbar-zoom .bar-scale-button {
+  min-width: 36px;
+  min-height: 32px;
 }
 
 .bar-scale-button {
@@ -1979,6 +2159,7 @@ input[type='file'] {
   margin: 2px 0 0;
   font-size: 10px;
   line-height: 1.45;
+  white-space: pre-line;
   color: var(--text);
 }
 
@@ -2238,11 +2419,12 @@ input[type='file'] {
 
 /* Touch screens get the tallest rows regardless of the manual zoom step. */
 @media (max-width: 768px) {
-  .mobile-bars-only .app-title-block,
-  .mobile-bars-only .volume-panel,
-  .mobile-bars-only .project-export-panel,
-  .mobile-bars-only .setup-stack {
-    display: none;
+  :root {
+    --mobile-transport-height: 92px;
+  }
+
+  .app-layout.has-audio-loaded .app-main {
+    padding-bottom: calc(var(--mobile-transport-height) + env(safe-area-inset-bottom));
   }
 
   .sticky-transport-header {
@@ -2267,10 +2449,6 @@ input[type='file'] {
     box-sizing: border-box;
     padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
     border-bottom: 0;
-  }
-
-  .app-layout:not(.has-audio-loaded) .playback-controls-panel {
-    display: none;
   }
 
   .mobile-micro-waveform {
@@ -2323,7 +2501,7 @@ input[type='file'] {
   }
 
   .bar-list {
-    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+    padding-bottom: 0;
   }
 
   /* On mobile, waveform height carries the visual row scale. */
@@ -2802,6 +2980,11 @@ body.drag-slider-active * {
   flex-wrap: wrap;
 }
 
+.bwe-loop-row {
+  display: flex;
+  width: 100%;
+}
+
 .bwe-nudge-select {
   font-size: 5.5px;
   padding: 2px 4px;
@@ -2811,12 +2994,14 @@ body.drag-slider-active * {
 .quick-loop-group {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 0;
+  width: 100%;
 }
 
 .quick-loop-button {
-  min-height: 13px;
-  padding: 2px 5px;
+  flex: 1 1 0;
+  min-height: 28px;
+  padding: 4px 6px;
   font-size: 5.5px;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -2839,6 +3024,29 @@ body.drag-slider-active * {
   font-size: 6.5px;
   line-height: 1;
   min-width: 13px;
+}
+
+.bwe-zoom-row {
+  justify-content: center;
+}
+
+.bwe-zoom-row .bwe-nudge {
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.beat-setup-subsection-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  margin-left: 6px;
+  padding-top: 7px;
+  font-size: 5.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgba(160, 163, 177, 0.82);
 }
 
 .bwe-ctrl-sep {
