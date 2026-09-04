@@ -58,9 +58,14 @@ export class AudioEngine {
   private captureLength = 0
   private captureBaseFrame?: number
   private expectedNextFrame?: number
+  private captureDiscontinuityCount = 0
+  private captureDiscontinuityGapFrames = 0
+  private captureDiscontinuityWarnedThisRecording = false
   private emptyInputStreak = 0
+  private emptyInputSubstitutionCount = 0
+  private emptyInputSubstitutionFrames = 0
+  private emptyInputSubstitutionWarnedThisRecording = false
   private activeRecording?: { startFrame: number }
-  private recordingActive = false
   private playingOffset = 0
   private playStartedAt = 0
   private loopPhaseStartedAt = 0
@@ -557,34 +562,48 @@ export class AudioEngine {
     if (wasEmptyInput) {
       this.emptyInputStreak += 1
     } else if (this.emptyInputStreak > 0) {
-      console.warn('%c[REC] worklet substituted silence for empty input frames', 'color:#fff;background:#c60;padding:2px 6px', {
-        consecutiveFrames: this.emptyInputStreak,
-        approxDurationMs: Math.round((this.emptyInputStreak * data.length / (this.ctx?.sampleRate ?? 44100)) * 1000),
-        endedAtCaptureFrame: startFrame,
-        duringActiveRecording: !!this.activeRecording,
-      })
+      this.emptyInputSubstitutionCount += 1
+      this.emptyInputSubstitutionFrames += this.emptyInputStreak
+      if (this.activeRecording && !this.emptyInputSubstitutionWarnedThisRecording) {
+        this.emptyInputSubstitutionWarnedThisRecording = true
+        console.warn('%c[REC] worklet substituted silence for empty input frames', 'color:#fff;background:#c60;padding:2px 6px', {
+          consecutiveFrames: this.emptyInputStreak,
+          totalSubstitutionEvents: this.emptyInputSubstitutionCount,
+          totalSubstitutedFrames: this.emptyInputSubstitutionFrames,
+          approxDurationMs: Math.round((this.emptyInputStreak * data.length / (this.ctx?.sampleRate ?? 44100)) * 1000),
+          endedAtCaptureFrame: startFrame,
+          duringActiveRecording: true,
+        })
+      }
       this.emptyInputStreak = 0
     }
     this.appendCapturedFrame(data, startFrame)
-    if (this.recordingActive && (this.captureLength / data.length) % 50 < 1) {
-      console.log('[Punchin] microphone frames received', { frames: this.captureLength })
-    }
   }
 
   private appendCapturedFrame(data: Float32Array, startFrame: number) {
     if (this.captureBaseFrame === undefined) this.captureBaseFrame = startFrame
+    const expectedFrame = this.expectedNextFrame
+    this.expectedNextFrame = startFrame + data.length
     // Detect the audio thread skipping a render quantum (e.g. under system load) — this
     // would leave a real hole of exact silence in the capture buffer, distinct from any
-    // bug in our own frame bookkeeping. Surfacing it here proves/disproves that directly.
-    if (this.expectedNextFrame !== undefined && startFrame !== this.expectedNextFrame) {
-      console.warn('%c[REC] capture frame discontinuity — audio thread likely skipped render quanta', 'color:#fff;background:#c00;padding:2px 6px', {
-        expectedFrame: this.expectedNextFrame,
-        actualFrame: startFrame,
-        gapFrames: startFrame - this.expectedNextFrame,
-        duringActiveRecording: !!this.activeRecording,
-      })
+    // bug in our own frame bookkeeping. Store every gap, but warn once per recording so
+    // Chrome DevTools never gets hammered from the audio callback cadence.
+    if (expectedFrame !== undefined && startFrame !== expectedFrame) {
+      const gapFrames = startFrame - expectedFrame
+      this.captureDiscontinuityCount += 1
+      this.captureDiscontinuityGapFrames += gapFrames
+      if (!this.captureDiscontinuityWarnedThisRecording) {
+        this.captureDiscontinuityWarnedThisRecording = true
+        console.warn('%c[REC] capture frame discontinuity — audio thread likely skipped render quanta', 'color:#fff;background:#c00;padding:2px 6px', {
+          expectedFrame,
+          actualFrame: startFrame,
+          gapFrames,
+          totalDiscontinuities: this.captureDiscontinuityCount,
+          totalGapFrames: this.captureDiscontinuityGapFrames,
+          duringActiveRecording: !!this.activeRecording,
+        })
+      }
     }
-    this.expectedNextFrame = startFrame + data.length
     const offset = startFrame - this.captureBaseFrame
     if (offset < 0) {
       // The main-thread clock used to start a recording/trim (ctx.currentTime) can briefly
@@ -861,7 +880,12 @@ export class AudioEngine {
     const resolvedStartAt = startAtCtxTime ?? ctx.currentTime
     const startFrame = Math.round(resolvedStartAt * ctx.sampleRate)
     this.activeRecording = { startFrame }
-    this.recordingActive = true
+    this.captureDiscontinuityCount = 0
+    this.captureDiscontinuityGapFrames = 0
+    this.captureDiscontinuityWarnedThisRecording = false
+    this.emptyInputSubstitutionCount = 0
+    this.emptyInputSubstitutionFrames = 0
+    this.emptyInputSubstitutionWarnedThisRecording = false
     const micTracks = this.micStream.getAudioTracks().map((t) => ({ label: t.label, enabled: t.enabled, muted: t.muted, state: t.readyState }))
     console.log('%c[REC] START', 'color:#fff;background:#08c;padding:2px 6px', {
       ctxTime: ctx.currentTime.toFixed(3),
@@ -881,7 +905,6 @@ export class AudioEngine {
       return undefined
     }
     const { startFrame } = this.activeRecording
-    this.recordingActive = false
     const sampleRate = this.ctx.sampleRate
     const nowFrame = Math.round(this.ctx.currentTime * sampleRate)
     const targetEndFrame = endAtCtxTime === undefined ? nowFrame : Math.round(endAtCtxTime * sampleRate)
@@ -908,6 +931,10 @@ export class AudioEngine {
       endFrame,
       expectedFrames,
       frames: data.length,
+      emptyInputSubstitutionEvents: this.emptyInputSubstitutionCount,
+      emptyInputSubstitutedFrames: this.emptyInputSubstitutionFrames,
+      captureDiscontinuities: this.captureDiscontinuityCount,
+      captureDiscontinuityGapFrames: this.captureDiscontinuityGapFrames,
     })
     if (!data.length) {
       console.warn('%c[REC] no frames captured — mic produced nothing', 'color:#c00')
