@@ -36,10 +36,10 @@ body {
   overflow: hidden;
 }
 
-.sticky-transport-header {
+.fixed-top-dock {
   position: sticky;
   top: 0;
-  z-index: 999;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -56,6 +56,7 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 2px 6px;
   display: block;
+  background: #0f1115;
 }
 
 .workspace-empty-state {
@@ -646,13 +647,27 @@ body {
 .shell {
   width: 100%;
   height: 100%;
-  max-height: 100%;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
   gap: 4px;
+}
+
+.tab-content-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: calc(100vh - var(--sticky-header-height, 0px));
+  max-height: calc(100vh - var(--sticky-header-height, 0px));
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: var(--bg);
+}
+
+.playback-controls-panel {
+  background: #0f1115;
 }
 
 .shell > :not(.bar-list-panel) {
@@ -662,7 +677,6 @@ body {
 .bar-list-panel {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -714,6 +728,7 @@ body {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -735,15 +750,107 @@ body {
   background: var(--panel);
 }
 
-.mobile-bars-only .app-title-block,
-.mobile-bars-only .volume-panel,
-.mobile-bars-only .project-export-panel,
-.mobile-bars-only .setup-stack {
+.app-layout:not(.has-audio-loaded) .playback-controls-panel {
   display: none;
 }
 
-.app-layout:not(.has-audio-loaded) .playback-controls-panel {
+.section-tab-nav {
+  display: flex;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  gap: 2px;
+  padding: 2px 0;
+  overflow: hidden;
+  background: #0f1115;
+}
+
+.section-tab-nav-item {
+  display: inline-flex;
+  flex: 1 1 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.section-tab-nav-item-active {
+  color: var(--text);
+  background: rgba(77, 208, 225, 0.12);
+  border-color: rgba(77, 208, 225, 0.7);
+  box-shadow: 0 0 8px rgba(77, 208, 225, 0.16);
+}
+
+.section-tab-nav-item:disabled {
+  opacity: 0.4;
+}
+
+.section-tab-nav-label-short {
   display: none;
+}
+
+.section-tab-nav-help {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 7px;
+  line-height: 1;
+}
+
+.section-tab-nav-bars-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.app-title-block {
+  position: relative;
+  background: var(--bg);
+}
+
+.tabbed-layout .accordion-panel.is-collapsed {
+  display: none;
+}
+
+.tabbed-layout .accordion-panel > .collapsible-header,
+.tabbed-layout .accordion-panel > .section-body > .collapsible-header {
+  display: none;
+}
+
+@media (max-width: 479px) {
+  .section-tab-nav-label-full {
+    display: none;
+  }
+
+  .section-tab-nav-label-short {
+    display: inline;
+  }
 }
 
 .app-title-block {
@@ -1457,13 +1564,17 @@ input[type='file'] {
   display: block;
   flex: 1 1 auto;
   min-height: 0;
-  height: 100%;
-  max-height: none;
   overflow-y: auto;
   overflow-x: hidden;
+  box-sizing: border-box;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
+}
+
+.bar-list-transitioning {
+  pointer-events: none;
 }
 
 .bar-list.bar-scale-2x {
@@ -1486,20 +1597,22 @@ input[type='file'] {
 
 .bars-toolbar {
   display: grid;
-  gap: 6px;
+  gap: 3px;
   width: 100%;
-  margin-bottom: 6px;
+  margin-bottom: 3px;
 }
 
 .bars-toolbar-top-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  gap: 3px;
 }
 
 .bars-toolbar-mode,
 .bars-toolbar-delete {
-  min-height: 28px;
+  min-height: auto;
+  padding-top: 4px;
+  padding-bottom: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1509,13 +1622,13 @@ input[type='file'] {
 .bars-toolbar-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 3px;
 }
 
 .bars-toolbar-actions button {
   min-width: 0;
-  min-height: 28px;
-  padding: 3px 6px;
+  min-height: auto;
+  padding: 4px 6px;
 }
 
 .bars-toolbar-delete {
@@ -1535,7 +1648,9 @@ input[type='file'] {
 
 .bars-toolbar-zoom .bar-scale-button {
   min-width: 36px;
-  min-height: 32px;
+  min-height: auto;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
 .bar-scale-button {
@@ -1552,6 +1667,7 @@ input[type='file'] {
 }
 
 .bar-row {
+  box-sizing: border-box;
   position: relative;
   border: 1px solid var(--border);
   border-radius: 2.5px;
@@ -2423,31 +2539,15 @@ input[type='file'] {
     --mobile-transport-height: 92px;
   }
 
-  .app-layout.has-audio-loaded .app-main {
-    padding-bottom: calc(var(--mobile-transport-height) + env(safe-area-inset-bottom));
-  }
-
-  .sticky-transport-header {
-    position: static;
-  }
-
-  .sticky-transport-header > .waveform-section {
-    display: none;
-  }
-
   .playback-controls-panel {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 1000;
+    position: relative;
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
     gap: 8px;
     width: 100%;
     box-sizing: border-box;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    padding: 8px;
     border-bottom: 0;
   }
 

@@ -9,6 +9,8 @@ type BarScale = 1 | 2 | 4
 interface Props {
   expanded: boolean
   onToggleSection: () => void
+  controlsCollapsed: boolean
+  onToggleControls: () => void
   bars: Bar[]
   emptyMessage: string
   audioBuffer?: AudioBuffer
@@ -36,8 +38,6 @@ interface Props {
   onPasteTake: (barIndex: number) => void
   onClearClipboard: () => void
   onMoveTakeToBar: (takeId: string, barIndex: number) => void
-  focusMode: boolean
-  onToggleFocus: () => void
   onShowHelp: () => void
   onFocusBar: (barIndex: number) => void
   onTakeGain: (takeId: string, value: number) => void
@@ -47,6 +47,8 @@ interface Props {
 export function BarList({
   expanded,
   onToggleSection,
+  controlsCollapsed,
+  onToggleControls,
   bars,
   emptyMessage,
   audioBuffer,
@@ -74,8 +76,6 @@ export function BarList({
   onPasteTake,
   onClearClipboard,
   onMoveTakeToBar,
-  focusMode,
-  onToggleFocus,
   onShowHelp,
   onFocusBar,
   onTakeGain,
@@ -86,10 +86,13 @@ export function BarList({
   const [draggingTakeId, setDraggingTakeId] = useState<string | null>(null)
   const [dropTargetBar, setDropTargetBar] = useState<number | null>(null)
   const [justPasted, setJustPasted] = useState(false)
+  const [isCollapsingControls, setIsCollapsingControls] = useState(false)
   const pastedTimer = useRef<number | null>(null)
+  const collapseTimer = useRef<number | null>(null)
 
   useEffect(() => () => {
     if (pastedTimer.current) window.clearTimeout(pastedTimer.current)
+    if (collapseTimer.current) window.clearTimeout(collapseTimer.current)
   }, [])
 
   // A copy stays on the clipboard for repeat pastes, so the banner is the only place
@@ -109,7 +112,15 @@ export function BarList({
     return takeCount + (armedTakeByBar[bar.index]?.length ?? 0) < 5
   })
   const allAvailableBarsArmed = availableBars.length > 0 && availableBars.every((bar) => (armedTakeByBar[bar.index]?.length ?? 0) > 0)
-
+  const collapseControls = () => {
+    setIsCollapsingControls(true)
+    onToggleControls()
+    if (collapseTimer.current) window.clearTimeout(collapseTimer.current)
+    collapseTimer.current = window.setTimeout(() => {
+      collapseTimer.current = null
+      setIsCollapsingControls(false)
+    }, 100)
+  }
   return (
     <div className={`panel bar-list-panel accordion-panel ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
       <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={expanded} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); onToggleSection() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggleSection() } }} style={{ marginBottom: expanded ? 6 : 0 }}>
@@ -127,21 +138,21 @@ export function BarList({
           </button>
         </div>
       </div>
-      {expanded && bars.length > 0 && (
+      {expanded && bars.length > 0 && !controlsCollapsed && (
         <div className="bars-toolbar" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <div className="bars-toolbar-top-row">
             <button
               type="button"
-              className={`secondary bar-focus-button bars-toolbar-mode ${focusMode ? 'bar-focus-on' : ''}`}
-              aria-pressed={focusMode}
-              title={focusMode ? 'Reopen the sections above' : 'Collapse the sections above to focus on bars'}
+              className="secondary bar-focus-button bars-toolbar-mode"
+              aria-pressed={false}
+              title="Hide bar controls"
               onPointerDown={(event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                onToggleFocus()
+                collapseControls()
               }}
             >
-              {focusMode ? 'Show Settings' : 'Bars Only'}
+              Hide Controls
             </button>
             <div className="bars-toolbar-zoom" aria-label="Bar row zoom">
               <button type="button" className={`secondary bar-scale-button ${barScale === 1 ? 'bar-scale-disabled' : ''}`} aria-label="Zoom out" onClick={() => setBarScale((scale) => (scale === 4 ? 2 : 1))}>−</button>
@@ -199,7 +210,7 @@ export function BarList({
         </div>
       )}
 
-      <div className={`bar-list bar-scale-${barScale}x`} tabIndex={0}>
+      <div className={`bar-list bar-scale-${barScale}x ${isCollapsingControls ? 'bar-list-transitioning' : ''}`} tabIndex={0}>
         {bars.map((bar) => {
           const active = playhead >= bar.startSec && playhead < bar.endSec
           const inLoop = loopRange && bar.index >= loopRange.start && bar.index <= loopRange.end

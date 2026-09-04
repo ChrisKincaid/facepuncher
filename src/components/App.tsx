@@ -30,6 +30,7 @@ const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180
 
 type HelpTopic = 'volume' | 'project' | 'setup' | 'bars' | 'bar-boundaries' | 'vocal-timing' | 'bleed-control'
+type MainSection = 'volume' | 'project' | 'setup' | 'bars'
 
 const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; text: string }[] }> = {
   volume: {
@@ -207,15 +208,23 @@ export default function App() {
   const [showProject, setShowProject] = useState(true)
   const [showVolume, setShowVolume] = useState(false)
   const [showBars, setShowBars] = useState(false)
-  const [barsOnly, setBarsOnly] = useState(false)
+  const [barsControlsCollapsed, setBarsControlsCollapsed] = useState(() => sessionStorage.getItem('punchin-bars-controls-collapsed') === 'true')
+  const activeSection: MainSection = showVolume ? 'volume' : showSetup ? 'setup' : showBars ? 'bars' : 'project'
 
   // Exactly one workspace section can occupy the available vertical space at a time.
-  const toggleAccordionPanel = (panel: 'volume' | 'setup' | 'project' | 'bars') => {
-    setBarsOnly(false)
+  const toggleAccordionPanel = (panel: MainSection) => {
     setShowVolume(panel === 'volume')
     setShowSetup(panel === 'setup')
     setShowProject(panel === 'project')
     setShowBars(panel === 'bars')
+  }
+
+  const toggleBarsControls = () => {
+    setBarsControlsCollapsed((collapsed) => {
+      const next = !collapsed
+      sessionStorage.setItem('punchin-bars-controls-collapsed', String(next))
+      return next
+    })
   }
 
   const stickyHeaderRef = useRef<HTMLDivElement | null>(null)
@@ -268,7 +277,6 @@ export default function App() {
 
   useEffect(() => {
     if (audioLoaded) return
-    setBarsOnly(false)
     setShowProject(true)
     setShowVolume(false)
     setShowSetup(false)
@@ -1487,27 +1495,11 @@ export default function App() {
     }
   }
 
-  const enterBarsOnlyMode = () => {
-    if (!audioLoaded) return
-    setBarsOnly(true)
-    setShowVolume(false)
-    setShowSetup(false)
-    setShowProject(false)
-    setShowBars(true)
-  }
-
-  const exitBarsOnlyMode = () => {
-    setBarsOnly(false)
-    setShowVolume(false)
-    setShowProject(false)
-    setShowSetup(false)
-    setShowBars(true)
-  }
-
   return (
-    <div className={`app-layout ${audioLoaded ? 'has-audio-loaded' : ''} ${audioLoaded && barsOnly ? 'mobile-bars-only' : ''}`}>
+    <div className={`app-layout tabbed-layout ${audioLoaded ? 'has-audio-loaded' : ''}`}>
       <div className="app-main">
         <div className="shell">
+          <div className="fixed-top-dock" ref={stickyHeaderRef}>
           <div className="app-title-block">
             <h2 className="app-title">PUNCH RAP</h2>
             <div className="app-title-credit">
@@ -1515,8 +1507,6 @@ export default function App() {
               <a href="https://boxbap.com" target="_blank" rel="noopener noreferrer">BOXBAP</a>
             </div>
           </div>
-
-          <div className="sticky-transport-header" ref={stickyHeaderRef}>
         <div className={`section-collapsible waveform-section ${showWaveform ? '' : 'is-collapsed'}`}>
         <div className="section-body">
         {showWaveform ? (
@@ -1621,8 +1611,62 @@ export default function App() {
           </button>
         </div>
         </div>
+
+        <nav className="section-tab-nav" aria-label="Workspace sections">
+          {([
+            { id: 'volume', label: 'Volume', shortLabel: 'Vol', help: 'volume' },
+            { id: 'project', label: 'Import / Export', shortLabel: 'Import', help: 'project' },
+            { id: 'setup', label: 'Beat Setup', shortLabel: 'Beat', help: 'setup' },
+            { id: 'bars', label: 'Bars', shortLabel: 'Bars', help: 'bars' },
+          ] as const).map((section) => {
+            const isActive = activeSection === section.id
+            const disabled = section.id === 'bars' && !audioLoaded
+            return (
+              <button
+                key={section.id}
+                type="button"
+                className={`section-tab-nav-item ${isActive ? 'section-tab-nav-item-active' : ''}`}
+                aria-current={isActive ? 'page' : undefined}
+                disabled={disabled}
+                onClick={(event) => {
+                  if (isActive && (event.target as HTMLElement).closest('.section-tab-nav-help')) {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setHelpTopic(section.help)
+                    return
+                  }
+                  toggleAccordionPanel(section.id)
+                }}
+              >
+                {section.id === 'bars' && isActive && (
+                  <span
+                    className="section-tab-nav-bars-toggle"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={barsControlsCollapsed ? 'Show bar controls' : 'Hide bar controls'}
+                    onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }}
+                    onClick={(event) => { event.preventDefault(); event.stopPropagation(); toggleBarsControls() }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        toggleBarsControls()
+                      }
+                    }}
+                  >
+                    {barsControlsCollapsed ? '+' : '-'}
+                  </span>
+                )}
+                <span className="section-tab-nav-label section-tab-nav-label-full">{section.label}</span>
+                <span className="section-tab-nav-label section-tab-nav-label-short">{section.shortLabel}</span>
+                {isActive && <span className="section-tab-nav-help" role="img" aria-label={`Help for ${section.label}`}>?</span>}
+              </button>
+            )
+          })}
+        </nav>
         </div>
 
+        <div className="tab-content-view">
         <section className={`panel volume-panel section-collapsible accordion-panel ${showVolume ? '' : 'is-collapsed'}`}>
         <div className="section-body">
         <div className="collapsible-header section-header-toggle" role="button" tabIndex={0} aria-expanded={showVolume} {...sectionActionHandlers(() => toggleAccordionPanel('volume'))}>
@@ -2065,6 +2109,8 @@ export default function App() {
           {audioLoaded && <BarList
             expanded={showBars}
             onToggleSection={() => toggleAccordionPanel('bars')}
+            controlsCollapsed={barsControlsCollapsed}
+            onToggleControls={toggleBarsControls}
             bars={project.bars}
             emptyMessage="Set Bar 1 in Beat Setup to generate bars"
             audioBuffer={audioEngine.beatAudioBuffer}
@@ -2116,9 +2162,7 @@ export default function App() {
             onPasteTake={(barIndex) => { void handleTakePaste(barIndex) }}
             onClearClipboard={handleClearClipboard}
             onMoveTakeToBar={handleTakeDropOnBar}
-            focusMode={barsOnly}
             onShowHelp={() => setHelpTopic('bars')}
-            onToggleFocus={barsOnly ? exitBarsOnlyMode : enterBarsOnlyMode}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
             onToggleVocalMute={() => {
@@ -2127,6 +2171,7 @@ export default function App() {
               setVocalMuted(nextMuted)
             }}
           />}
+        </div>
         </div>
       </div>
 
