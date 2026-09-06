@@ -6,7 +6,9 @@
       "https://punchrap-boxbap.web.app",
       "https://punchrap-boxbap.firebaseapp.com",
       "https://boombapboombox-a5b78.web.app",
-      "https://boombapboombox-a5b78.firebaseapp.com"
+      "https://boombapboombox-a5b78.firebaseapp.com",
+      "https://punchrap.boxbap.com",
+      "https://punchrap.com"
     ],
     "method": ["GET", "HEAD"],
     "responseHeader": ["Content-Type"],
