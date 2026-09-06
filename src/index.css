@@ -2631,10 +2631,6 @@ input[type='file'] {
 
 /* Touch screens get the tallest rows regardless of the manual zoom step. */
 @media (max-width: 768px) {
-  :root {
-    --mobile-transport-height: 92px;
-  }
-
   .playback-controls-panel {
     position: relative;
     display: flex;
@@ -2665,56 +2661,37 @@ input[type='file'] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 40px;
-    min-height: 40px;
     margin: 0;
     border-radius: 4px;
   }
 
   .playback-controls-panel .playback-back-button {
-    flex: 0 0 44px;
-    padding: 0;
+    flex: 0 0 28px;
+    padding: 3px 0;
+    font-size: 8px;
     border: 1px solid var(--border);
   }
 
   .playback-controls-panel .playback-play-group .playback-wide-button {
     flex: 2 1 auto;
     min-width: 0;
-    padding: 0 12px;
+    padding: 3px 0;
+    font-size: 7.5px;
   }
 
   .playback-controls-panel .playback-loop-group .playback-wide-button {
     flex: 1 1 auto;
-    min-width: 120px;
-    padding: 0 12px;
+    min-width: 0;
+    padding: 3px 0;
+    font-size: 7.5px;
     border: 1px solid var(--border);
   }
 
   .playback-controls-panel .playback-loop-eye {
-    flex: 0 0 44px;
-    padding: 0;
+    flex: 0 0 28px;
+    padding: 3px 0;
+    font-size: 8px;
     border: 1px solid var(--border) !important;
-  }
-
-  .bar-list {
-    padding-bottom: 0;
-  }
-
-  /* On mobile, waveform height carries the visual row scale. */
-  .bar-list,
-  .bar-list.bar-scale-1x {
-    --bar-wave-height: 26px;
-    --bar-ctrl-scale: 1.8;
-  }
-
-  .bar-list.bar-scale-2x {
-    --bar-wave-height: 40px;
-    --bar-ctrl-scale: 2.2;
-  }
-
-  .bar-list.bar-scale-4x {
-    --bar-wave-height: 62px;
-    --bar-ctrl-scale: 2.7;
   }
 
   /* All five controls stay inline; they shrink rather than wrap. */
@@ -2726,7 +2703,6 @@ input[type='file'] {
     justify-content: space-between;
     gap: 4px;
     width: 100%;
-    margin-bottom: 6px;
   }
 
   .bar-scale-controls button {
@@ -2758,7 +2734,7 @@ input[type='file'] {
      and the controls from overlapping once the controls span the full width. */
   .bar-list-panel .collapsible-header {
     flex-direction: column;
-    gap: 6px;
+    gap: 0;
     min-height: 0;
   }
 
@@ -2771,12 +2747,16 @@ input[type='file'] {
   }
 
   .top-nav,
-  .nav-waveform-stage,
   .beat-setup-anchor,
   .bar1-anchor-canvas {
     width: 100%;
     max-width: 100%;
     overflow-x: clip;
+  }
+
+  /* The transport's micro waveform takes over below this width — avoid stacking both. */
+  .nav-waveform-stage {
+    display: none;
   }
 
   /* ── wrapped, centred control groups ── */
@@ -2906,95 +2886,6 @@ input[type='file'] {
     min-height: 26px;
   }
 
-  /* ── bar rows become two-line cards ── */
-  .bar-main-row {
-    flex-wrap: wrap;
-    height: auto;
-    min-height: 0;
-    gap: 4px;
-    padding: 6px 4px;
-  }
-
-  /* Its own line, but never wrapped internally — everything shrinks to fit instead so
-     the star and delete stay inside the card's right edge. */
-  .bar-controls-left {
-    flex: 1 0 100%;
-    flex-wrap: nowrap;
-    justify-content: space-between;
-    gap: 3px;
-    min-width: 0;
-  }
-
-  .bar-meta {
-    flex: 0 1 auto;
-    min-width: 0;
-    gap: 2px;
-  }
-
-  .bar-num {
-    min-width: 0;
-  }
-
-  .bar-wave-thumb {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding-right: 0;
-  }
-
-  .take-slots {
-    flex: 1 1 auto;
-    min-width: 0;
-    gap: 2px;
-  }
-
-  /* Fixed scaled widths are what pushed the row past the card; let the pads share the
-     available space instead, keeping their scaled height. */
-  .take-pad {
-    flex: 1 1 0;
-    width: auto;
-    min-width: 0;
-    max-width: calc(13px * var(--bar-ctrl-scale, 1));
-    padding: 0;
-  }
-
-  .bar-take-actions {
-    flex: 0 0 auto;
-    gap: 2px;
-  }
-
-  .bar-take-actions button {
-    padding: 2px;
-  }
-
-  .bar-fav-button,
-  .bar-delete-button,
-  .bar-transfer-button {
-    min-width: calc(11px * var(--bar-ctrl-scale, 1));
-  }
-
-  /* Driven by the zoom step so -/+ visibly resize the waveform. */
-  .bar-gains {
-    flex: 1 1 auto;
-    height: var(--bar-wave-height, 34px);
-  }
-
-  .bar-gain-row {
-    height: var(--bar-wave-height, 34px);
-  }
-
-  .bar-loop-segment {
-    flex: 0 0 auto;
-  }
-
-  .bar-loop-segment button {
-    min-width: 40px;
-    min-height: 34px;
-  }
-
-  .bar-transfer-action {
-    min-height: 34px;
-    font-size: 11px;
-  }
 }
 
 /* ── expanding drag-to-adjust volume slider ── */
