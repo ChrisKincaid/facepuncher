@@ -141,6 +141,7 @@ export default function App() {
     setLoopRange,
     setLatencyOffset,
     armTake,
+    armTakesForBars,
     disarmTake,
     consumeArmedTake,
     saveTake,
@@ -2172,6 +2173,29 @@ export default function App() {
                 }
               }
               setStatus(`Take ${slot + 1} armed for Bar ${barIndex + 1}. Press Play or Loop on that bar to record.`)
+            }}
+            onArmTakesForBars={(barAssignments) => {
+              if (!barAssignments.length) return
+              armTakesForBars(barAssignments)
+              setCurrentBar(barAssignments[0].barIndex)
+              void audioEngine.ensureMicCapture()
+              if (isPlayingRef.current) {
+                for (const { barIndex } of barAssignments) {
+                  audioEngine.cancelChainedForBar(barIndex)
+                  if (chainedThroughBarRef.current >= barIndex) chainedThroughBarRef.current = barIndex - 1
+                  const position = audioEngine.currentTime
+                  const bar = project.bars[barIndex]
+                  if (bar && position >= bar.startSec && position < bar.endSec) {
+                    lastPlayingBarRef.current = barIndex
+                    previousAudioTimeRef.current = position
+                    console.log('[Punchin] take armed during active bar; waiting for next entry', { barIndex, position })
+                  }
+                }
+              }
+              const summary = barAssignments.length === 1
+                ? `Take ${barAssignments[0].slot + 1} armed for Bar ${barAssignments[0].barIndex + 1}. Press Play or Loop on that bar to record.`
+                : `${barAssignments.length} takes armed across bars ${barAssignments.map(({ barIndex }) => barIndex + 1).join(', ')}. Press Play or Loop to record.`
+              setStatus(summary)
             }}
             onDisarmTake={disarmTake}
             onSelectTake={handleSelectTake}

@@ -44,6 +44,7 @@ interface StoreState extends UIState {
   setVocalMuted: (flag: boolean) => void
   setLoopRange: (range?: { start: number; end: number }) => void
   armTake: (barIndex: number, requestedSlot: number) => void
+  armTakesForBars: (barAssignments: Array<{ barIndex: number; slot: number }>) => void
   disarmTake: (barIndex: number, slot?: number) => void
   consumeArmedTake: (barIndex: number) => void
   setLatencyOffset: (ms: number) => void
@@ -179,8 +180,23 @@ export const useStore = create<StoreState>((set, get) => ({
     if (takes.length + armed.length >= 5) return
     const slot = Math.min(Math.max(0, requestedSlot), takes.length + armed.length)
     if (armed.includes(slot)) return
-      console.log('[Punchin] take armed', { barIndex, slot, requestedSlot })
+    console.log('[Punchin] take armed', { barIndex, slot, requestedSlot })
     set((state) => ({ armedTakeByBar: { ...state.armedTakeByBar, [barIndex]: [...armed, slot].sort((a, b) => a - b) } }))
+  },
+
+  armTakesForBars(barAssignments) {
+    if (!barAssignments.length) return
+    set((state) => {
+      const armedTakeByBar = { ...state.armedTakeByBar }
+
+      for (const { barIndex, slot } of barAssignments) {
+        const existing = armedTakeByBar[barIndex] ?? []
+        if (existing.includes(slot)) continue
+        armedTakeByBar[barIndex] = [...existing, slot].sort((a, b) => a - b)
+      }
+
+      return { armedTakeByBar }
+    })
   },
 
   disarmTake(barIndex, slot) {

@@ -40,6 +40,7 @@ interface Props {
   armedTakeByBar: Record<number, number[]>
   auditioningTakeId?: string
   onArmTake: (barIndex: number, slot: number) => void
+  onArmTakesForBars: (barAssignments: Array<{ barIndex: number; slot: number }>) => void
   onDisarmTake: (barIndex: number, slot?: number) => void
   onSelectTake: (barIndex: number, takeId: string) => void
   onAuditionTake: (takeId: string) => void
@@ -83,6 +84,7 @@ export function BarList({
   armedTakeByBar,
   auditioningTakeId,
   onArmTake,
+  onArmTakesForBars,
   onDisarmTake,
   onSelectTake,
   onAuditionTake,
@@ -164,13 +166,19 @@ export function BarList({
       eligibleArmAllBars.forEach((bar) => onDisarmTake(bar.index))
       return
     }
+
+    const assignments: Array<{ barIndex: number; slot: number }> = []
     eligibleArmAllBars.forEach((bar) => {
       const takeCount = takes.filter((take) => take.barIndex === bar.index).length
       const armedCount = armedTakeByBar[bar.index]?.length ?? 0
       if (armedCount === 1) return
       if (armedCount > 1) onDisarmTake(bar.index)
-      onArmTake(bar.index, takeCount)
+      assignments.push({ barIndex: bar.index, slot: takeCount })
     })
+
+    if (assignments.length) {
+      onArmTakesForBars(assignments)
+    }
   }
   const collapseControls = () => {
     setIsCollapsingControls(true)
