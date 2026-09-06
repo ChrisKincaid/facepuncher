@@ -2127,6 +2127,13 @@ input[type='file'] {
   border-color: rgba(246, 193, 119, 0.55);
 }
 
+.arm-all-toast {
+  justify-content: flex-start;
+  color: var(--accent-2);
+  border-color: rgba(246, 193, 119, 0.45);
+  background: #201d18;
+}
+
 .clipboard-banner-cancel {
   min-height: 16px;
   padding: 3px 8px;

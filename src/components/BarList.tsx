@@ -30,6 +30,7 @@ interface Props {
   emptyMessage: string
   audioBuffer?: AudioBuffer
   playhead: number
+  loopEnabled: boolean
   loopRange?: { start: number; end: number }
   currentBarIndex: number
   isRecording: boolean
@@ -72,6 +73,7 @@ export function BarList({
   emptyMessage,
   audioBuffer,
   playhead,
+  loopEnabled,
   loopRange,
   currentBarIndex,
   isRecording,
@@ -110,12 +112,15 @@ export function BarList({
   const [draggingTakeId, setDraggingTakeId] = useState<string | null>(null)
   const [dropTargetBar, setDropTargetBar] = useState<number | null>(null)
   const [justPasted, setJustPasted] = useState(false)
+  const [armAllToast, setArmAllToast] = useState<string | null>(null)
   const [isCollapsingControls, setIsCollapsingControls] = useState(false)
   const pastedTimer = useRef<number | null>(null)
+  const armAllToastTimer = useRef<number | null>(null)
   const collapseTimer = useRef<number | null>(null)
 
   useEffect(() => () => {
     if (pastedTimer.current) window.clearTimeout(pastedTimer.current)
+    if (armAllToastTimer.current) window.clearTimeout(armAllToastTimer.current)
     if (collapseTimer.current) window.clearTimeout(collapseTimer.current)
   }, [])
 
@@ -131,11 +136,42 @@ export function BarList({
     }, 1600)
   }
 
-  const availableBars = bars.filter((bar) => {
+  const targetBars = loopEnabled && loopRange && bars[loopRange.start] && bars[loopRange.end]
+    ? bars.filter((bar) => bar.index >= loopRange.start && bar.index <= loopRange.end)
+    : bars
+  const eligibleArmAllBars = targetBars.filter((bar) => {
     const takeCount = takes.filter((take) => take.barIndex === bar.index).length
-    return takeCount + (armedTakeByBar[bar.index]?.length ?? 0) < 5
+    return takeCount < 5
   })
-  const allAvailableBarsArmed = availableBars.length > 0 && availableBars.every((bar) => (armedTakeByBar[bar.index]?.length ?? 0) > 0)
+  const fullArmAllBars = targetBars.filter((bar) => takes.filter((take) => take.barIndex === bar.index).length >= 5)
+  const allEligibleBarsArmed = eligibleArmAllBars.length > 0 && eligibleArmAllBars.every((bar) => (armedTakeByBar[bar.index]?.length ?? 0) === 1)
+  const showArmAllToast = (message: string) => {
+    setArmAllToast(message)
+    if (armAllToastTimer.current) window.clearTimeout(armAllToastTimer.current)
+    armAllToastTimer.current = window.setTimeout(() => {
+      armAllToastTimer.current = null
+      setArmAllToast(null)
+    }, 3200)
+  }
+  const handleArmAll = () => {
+    if (fullArmAllBars.length) {
+      const labels = fullArmAllBars.slice(0, 5).map((bar) => bar.index + 1).join(', ')
+      const suffix = fullArmAllBars.length > 5 ? `, +${fullArmAllBars.length - 5} more` : ''
+      showArmAllToast(`Bars ${labels}${suffix} reached the 5-take limit and were skipped`)
+    }
+    if (!eligibleArmAllBars.length) return
+    if (allEligibleBarsArmed) {
+      eligibleArmAllBars.forEach((bar) => onDisarmTake(bar.index))
+      return
+    }
+    eligibleArmAllBars.forEach((bar) => {
+      const takeCount = takes.filter((take) => take.barIndex === bar.index).length
+      const armedCount = armedTakeByBar[bar.index]?.length ?? 0
+      if (armedCount === 1) return
+      if (armedCount > 1) onDisarmTake(bar.index)
+      onArmTake(bar.index, takeCount)
+    })
+  }
   const collapseControls = () => {
     setIsCollapsingControls(true)
     onToggleControls()
@@ -210,16 +246,10 @@ export function BarList({
             <button
               type="button"
               className="secondary"
-              disabled={!availableBars.length}
-              onClick={() => {
-                if (allAvailableBarsArmed) availableBars.forEach((bar) => onDisarmTake(bar.index))
-                else availableBars.forEach((bar) => {
-                  const takeCount = takes.filter((take) => take.barIndex === bar.index).length
-                  onArmTake(bar.index, takeCount + (armedTakeByBar[bar.index]?.length ?? 0))
-                })
-              }}
+              disabled={!eligibleArmAllBars.length}
+              onClick={handleArmAll}
             >
-              {allAvailableBarsArmed ? 'Unarm All' : 'Arm All'}
+              {allEligibleBarsArmed ? 'Unarm All' : 'Arm All'}
             </button>
             <button
               type="button"
@@ -239,6 +269,12 @@ export function BarList({
           {emptyMessage}
         </div>
       ) : <>
+
+      {armAllToast && (
+        <div className="clipboard-banner arm-all-toast" role="status">
+          {armAllToast}
+        </div>
+      )}
 
       {clipboardTake && (
         <div className={`clipboard-banner ${justPasted ? 'clipboard-banner-done' : ''}`} role="status">
