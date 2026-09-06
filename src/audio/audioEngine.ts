@@ -22,6 +22,8 @@ interface PcmStats {
 // Mirror of recorderWorklet.ts as plain JS, used to build the processor from a Blob when
 // the bundled module URL is unavailable. Keep the two in sync if the capture logic changes.
 const RECORDER_WORKLET_SOURCE = `
+const workletGlobal = globalThis
+const WORKLET_NAME = 'recorder-worklet'
 class RecorderWorklet extends AudioWorkletProcessor {
   process(inputs) {
     const input = inputs[0]
@@ -31,13 +33,17 @@ class RecorderWorklet extends AudioWorkletProcessor {
     return true
   }
 }
-registerProcessor('recorder-worklet', RecorderWorklet)
+if (!workletGlobal.__punchrapRecorderWorkletRegistered) {
+  registerProcessor(WORKLET_NAME, RecorderWorklet)
+  workletGlobal.__punchrapRecorderWorkletRegistered = true
+}
 `
 
 export class AudioEngine {
   private static readonly CROSSFADE_SEC = 0.1
   private static readonly DUCK_GAIN = 0.5011872336272722
   private static readonly MAX_CAPTURE_PREPEND_SEC = 30
+  private static readonly workletModulesLoaded = new WeakSet<AudioContext>()
 
   // Bleed removal tuning. Over-subtraction compensates for the room spreading the
   // bleed's energy beyond the bins the reference occupies; the spectral floor is the
@@ -64,6 +70,8 @@ export class AudioEngine {
   private monitorSource?: MediaStreamAudioSourceNode
   private micStream?: MediaStream
   private micSource?: MediaStreamAudioSourceNode
+  private micPreGain?: GainNode
+  private micInputGain = 1.0
   private recorderNode?: AudioWorkletNode
   private scriptProcessorNode?: ScriptProcessorNode
   private scriptProcessorFrame = 0
@@ -541,14 +549,12 @@ export class AudioEngine {
     // A suspended context can silently queue audio and dump it later as a
     // burst, which looks exactly like a growing delay. Force it running.
     await ctx.resume()
-    // Dedicated low-latency monitor stream: echo cancellation ON keeps the mic
-    // on the browser's real-time communications audio path (low latency),
-    // while noise suppression / auto gain stay OFF so held notes are not gated
-    // or pumped. Recording keeps its own untouched all-processing-off stream.
+    // Dedicated low-latency monitor stream: the monitor path should stay as clean and
+    // transparent as the recording path so held notes aren't gated by echo cancellation.
     if (!this.monitorStream) {
       this.monitorStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
+          echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
           latency: 0,
@@ -621,22 +627,42 @@ export class AudioEngine {
       console.warn('[Punchin] AudioWorklet unsupported — falling back to ScriptProcessor capture')
       return false
     }
-    try {
-      await ctx.audioWorklet.addModule(new URL('./recorderWorklet.ts', import.meta.url))
+    if (AudioEngine.workletModulesLoaded.has(ctx)) {
       return true
-    } catch (err) {
-      console.warn('[Punchin] bundled worklet module failed to load, trying inline blob', err)
     }
+
     let blobUrl: string | undefined
     try {
-      blobUrl = URL.createObjectURL(new Blob([RECORDER_WORKLET_SOURCE], { type: 'application/javascript' }))
+      const jsBlob = new Blob([RECORDER_WORKLET_SOURCE], { type: 'application/javascript' })
+      blobUrl = URL.createObjectURL(jsBlob)
       await ctx.audioWorklet.addModule(blobUrl)
+      AudioEngine.workletModulesLoaded.add(ctx)
       return true
     } catch (err) {
-      console.error('[Punchin] inline worklet module failed to load', err)
-      return false
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('already registered') || message.includes('already been registered')) {
+        AudioEngine.workletModulesLoaded.add(ctx)
+        console.warn('[Punchin] AudioWorklet already registered for this context; proceeding')
+        return true
+      }
+      console.warn('[Punchin] blobbed worklet failed to load, trying bundled module', err)
     } finally {
       if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+
+    try {
+      await ctx.audioWorklet.addModule(new URL('./recorderWorklet.ts', import.meta.url))
+      AudioEngine.workletModulesLoaded.add(ctx)
+      return true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('already registered') || message.includes('already been registered')) {
+        AudioEngine.workletModulesLoaded.add(ctx)
+        console.warn('[Punchin] AudioWorklet already registered for bundled module; proceeding')
+        return true
+      }
+      console.error('[Punchin] bundled worklet module failed to load', err)
+      return false
     }
   }
 
@@ -794,6 +820,13 @@ export class AudioEngine {
     }
   }
 
+  setMicInputGain(value: number) {
+    this.micInputGain = Math.max(0.25, Math.min(4, value))
+    if (this.micPreGain) {
+      this.micPreGain.gain.value = this.micInputGain
+    }
+  }
+
   async prepareMicrophone() {
     const ctx = await this.ensureContext()
     await ctx.resume()
@@ -804,12 +837,18 @@ export class AudioEngine {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
+          channelCount: 1,
+          sampleRate: 48000,
         },
       })
       console.log('[Punchin] microphone permission granted')
     }
     if (!this.micSource) {
       this.micSource = ctx.createMediaStreamSource(this.micStream)
+    }
+    if (!this.micPreGain) {
+      this.micPreGain = ctx.createGain()
+      this.micPreGain.gain.value = this.micInputGain
     }
   }
 
@@ -820,7 +859,11 @@ export class AudioEngine {
     await this.prepareMicrophone()
     await this.prepareRecorder()
     if (!this.micCaptureReady && this.micSource && this.captureNode) {
-      this.micSource.connect(this.captureNode)
+      this.micSource.disconnect()
+      this.micSource.connect(this.micPreGain ?? this.captureNode)
+      if (this.micPreGain) {
+        this.micPreGain.connect(this.captureNode)
+      }
       this.micCaptureReady = true
     }
   }

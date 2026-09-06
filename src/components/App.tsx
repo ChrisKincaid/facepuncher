@@ -23,8 +23,8 @@ const FALLBACK_LOOP_BARS = 16
 // Android and iOS route an audio accept list to capture apps and the gallery; omitting it sends
 // the picker straight to the file browser. Desktop keeps the filter.
 const IS_MOBILE = /android|iphone|ipad|ipod/i.test(navigator.userAgent)
-const AUDIO_ACCEPT = IS_MOBILE ? undefined : 'audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac'
-const PROJECT_ACCEPT = IS_MOBILE ? undefined : '.fist,.zip,application/zip,application/octet-stream'
+const AUDIO_ACCEPT = IS_MOBILE ? undefined : 'audio/*,.wav,.mp3,.flac,.ogg,.aiff'
+const PROJECT_ACCEPT = IS_MOBILE ? undefined : '.fist,*/*'
 const UNDO_WINDOW_SEC = 6
 const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180

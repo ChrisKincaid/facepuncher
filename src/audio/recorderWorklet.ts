@@ -5,6 +5,9 @@ declare abstract class AudioWorkletProcessor {
 declare function registerProcessor(name: string, processorCtor: typeof AudioWorkletProcessor): void
 declare const currentFrame: number
 
+const WORKLET_NAME = 'recorder-worklet'
+const workletGlobal = globalThis as typeof globalThis & { __punchrapRecorderWorkletRegistered?: boolean }
+
 class RecorderWorklet extends AudioWorkletProcessor {
   constructor() {
     super()
@@ -22,4 +25,7 @@ class RecorderWorklet extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('recorder-worklet', RecorderWorklet)
+if (!workletGlobal.__punchrapRecorderWorkletRegistered) {
+  registerProcessor(WORKLET_NAME, RecorderWorklet)
+  workletGlobal.__punchrapRecorderWorkletRegistered = true
+}
