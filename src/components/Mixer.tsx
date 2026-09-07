@@ -11,6 +11,8 @@ interface Props {
   monitorGain: number
   onToggleMonitor: () => void
   onMonitorGain: (value: number) => void
+  volumeBoost: boolean
+  onToggleVolumeBoost: () => void
 }
 
 function ChannelStrip({
@@ -70,6 +72,8 @@ export function Mixer({
   monitorGain,
   onToggleMonitor,
   onMonitorGain,
+  volumeBoost,
+  onToggleVolumeBoost,
 }: Props) {
   // Beat muting is a transient UI convenience — remember the pre-mute value locally and
   // restore it on unmute rather than adding persisted mute state to the project.
@@ -105,6 +109,25 @@ export function Mixer({
             <ChannelStrip label="Mic Vol" value={monitorGain} max={2} onChange={onMonitorGain} />
             <MuteButton muted={!monitorEnabled} onToggle={onToggleMonitor} label="Mic Monitor" />
           </div>
+      </div>
+      <div className="mixer-boost-row">
+        <button
+          type="button"
+          className={`mixer-boost-button ${volumeBoost ? 'mixer-boost-active' : ''}`}
+          onClick={onToggleVolumeBoost}
+          aria-pressed={volumeBoost}
+        >
+          Volume Boost: {volumeBoost ? 'ON' : 'OFF'}
+        </button>
+        <span
+          className="section-help-button mixer-boost-help"
+          role="img"
+          tabIndex={0}
+          aria-label="Volume Boost info"
+          title="Increases live playback volume for phone/laptop speakers using peak limiting. May cause slight dynamic compression on heavy kicks and bass. Does not alter exported mixdowns or acapellas."
+        >
+          ?
+        </span>
       </div>
     </div>
   )

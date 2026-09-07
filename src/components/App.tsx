@@ -127,6 +127,7 @@ export default function App() {
     loopRange,
     audioUrl,
     beatFile,
+    volumeBoost,
     setBeatMeta,
     setBar1AnchorTime,
     setBars,
@@ -157,6 +158,7 @@ export default function App() {
     toggleTakeLock,
     setTakeGain,
     updateMix,
+    setVolumeBoost,
     setProject,
     setProjectName,
   } = useStore()
@@ -446,6 +448,10 @@ export default function App() {
   useEffect(() => {
     audioEngine.setMasterVocalGain(project.mix.globalVocalGain)
   }, [project.mix.globalVocalGain])
+
+  useEffect(() => {
+    audioEngine.setVolumeBoost(volumeBoost)
+  }, [volumeBoost])
 
   useEffect(() => {
     audioEngine.setMasterVocalMuted(isVocalMuted)
@@ -1710,11 +1716,13 @@ export default function App() {
         {showVolume && (
         <Mixer
           mix={project.mix}
+          volumeBoost={volumeBoost}
           onMasterGain={(v) => updateMix({ masterBeatGain: v })}
           onGlobalVocalGain={(v) => {
             audioEngine.setMasterVocalGain(v)
             updateMix({ globalVocalGain: v })
           }}
+          onToggleVolumeBoost={() => setVolumeBoost(!volumeBoost)}
           isVocalMuted={isVocalMuted}
           onToggleVocalMute={() => {
             const nextMuted = !isVocalMuted

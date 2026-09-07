@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Bar, BarOverlayMode, GlobalOverlayMode, MixSettings, Project, Take } from '../data/models'
+import { audioEngine } from '../audio/audioEngine'
 
 /**
  * A take staged for relocation. Holds the audio's fileId rather than a decoded
@@ -25,6 +26,18 @@ interface UIState {
   audioUrl?: string
   beatFile?: File
   clipboardTake: TakeClipboard | null
+  /** Live-monitoring-only boost; a global app setting, not part of the project/preset. */
+  volumeBoost: boolean
+}
+
+const VOLUME_BOOST_STORAGE_KEY = 'punchin.volumeBoost'
+
+function loadVolumeBoostSetting(): boolean {
+  try {
+    return localStorage.getItem(VOLUME_BOOST_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
 }
 
 interface StoreState extends UIState {
@@ -61,6 +74,7 @@ interface StoreState extends UIState {
   toggleTakeLock: (takeId: string) => void
   setTakeGain: (takeId: string, gain: number) => void
   updateMix: (mix: Partial<MixSettings>) => void
+  setVolumeBoost: (enabled: boolean) => void
 }
 
 const defaultProject: Project = {
@@ -102,6 +116,7 @@ export const useStore = create<StoreState>((set, get) => ({
   loopRange: undefined,
   armedTakeByBar: {},
   clipboardTake: null,
+  volumeBoost: loadVolumeBoostSetting(),
 
   setClipboardTake(clip) {
     set({ clipboardTake: clip })
@@ -398,5 +413,11 @@ export const useStore = create<StoreState>((set, get) => ({
 
   updateMix(mix) {
     set((state) => ({ project: { ...state.project, mix: { ...state.project.mix, ...mix } } }))
+  },
+
+  setVolumeBoost(enabled) {
+    set({ volumeBoost: enabled })
+    try { localStorage.setItem(VOLUME_BOOST_STORAGE_KEY, String(enabled)) } catch { /* storage unavailable */ }
+    audioEngine.setVolumeBoost(enabled)
   },
 }))

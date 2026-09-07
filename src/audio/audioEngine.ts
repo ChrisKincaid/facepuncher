@@ -63,6 +63,12 @@ export class AudioEngine {
   private takeSource?: AudioBufferSourceNode
   private takeGain?: GainNode
   private masterVocalGain?: GainNode
+  // Live-monitoring-only boost chain (speaker volume aid): beat + vocal buses feed into
+  // this before the speakers. Never touched by offlineRender.ts, so exports are unaffected.
+  private monitorBus?: GainNode
+  private boostGainNode?: GainNode
+  private monitorLimiter?: DynamicsCompressorNode
+  private volumeBoostEnabled = false
   // Takes scheduled ahead of time to continue directly from a previous bar's take.
   private chainedSources: { source: AudioBufferSourceNode; gain: GainNode; barIndex: number }[] = []
   private monitorGain?: GainNode
@@ -133,9 +139,10 @@ export class AudioEngine {
   async ensureContext() {
     if (!this.ctx) {
       this.ctx = new AudioContext({ latencyHint: 'interactive' })
+      this.ensureMonitorChain()
       this.masterVocalGain = this.ctx.createGain()
       this.masterVocalGain.gain.value = this.vocalMuted ? 0 : this.masterVocalGainValue
-      this.masterVocalGain.connect(this.ctx.destination)
+      this.masterVocalGain.connect(this.monitorBus!)
       console.log('[Punchin] AudioContext created', { state: this.ctx.state, sampleRate: this.ctx.sampleRate })
     }
     return this.ctx
@@ -269,7 +276,8 @@ export class AudioEngine {
     const gain = this.ctx.createGain()
     gain.gain.value = this.masterGainValue
     this.beatGain = gain
-    gain.connect(this.ctx.destination)
+    this.ensureMonitorChain()
+    gain.connect(this.monitorBus!)
     source.connect(gain)
 
     this.playingOffset = offsetSec
@@ -301,11 +309,47 @@ export class AudioEngine {
   private getVocalOutputNode() {
     if (!this.ctx) return undefined
     if (!this.masterVocalGain) {
+      this.ensureMonitorChain()
       this.masterVocalGain = this.ctx.createGain()
-      this.masterVocalGain.connect(this.ctx.destination)
+      this.masterVocalGain.connect(this.monitorBus!)
     }
     this.masterVocalGain.gain.value = this.vocalMuted ? 0 : this.masterVocalGainValue
     return this.masterVocalGain
+  }
+
+  // Builds the monitor-only chain once per context: monitorBus -> boostGainNode ->
+  // monitorLimiter -> destination. Idempotent so callers can invoke it defensively.
+  private ensureMonitorChain() {
+    if (!this.ctx || this.monitorBus) return
+    this.monitorBus = this.ctx.createGain()
+    this.boostGainNode = this.ctx.createGain()
+    this.monitorLimiter = this.ctx.createDynamicsCompressor()
+    this.applyVolumeBoostParams()
+    this.monitorBus.connect(this.boostGainNode)
+    this.boostGainNode.connect(this.monitorLimiter)
+    this.monitorLimiter.connect(this.ctx.destination)
+  }
+
+  private applyVolumeBoostParams() {
+    if (!this.boostGainNode || !this.monitorLimiter) return
+    if (this.volumeBoostEnabled) {
+      this.boostGainNode.gain.value = 1.80
+      this.monitorLimiter.threshold.value = -0.6
+      this.monitorLimiter.knee.value = 3
+      this.monitorLimiter.ratio.value = 20
+      this.monitorLimiter.attack.value = 0.002
+      this.monitorLimiter.release.value = 0.080
+    } else {
+      this.boostGainNode.gain.value = 1.0
+      this.monitorLimiter.threshold.value = 0
+    }
+  }
+
+  /** Toggles the live-monitoring volume boost. Export rendering never routes through this chain. */
+  setVolumeBoost(enabled: boolean) {
+    this.volumeBoostEnabled = enabled
+    this.ensureMonitorChain()
+    this.applyVolumeBoostParams()
   }
 
   private getPcmStats(data: Float32Array): PcmStats {
