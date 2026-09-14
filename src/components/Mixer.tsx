@@ -1,13 +1,14 @@
-import { useRef, useState } from 'react'
 import type { MixSettings } from '../data/models'
 
 interface Props {
   mix: MixSettings
   onMasterGain: (value: number) => void
+  isBeatMuted: boolean
+  onToggleBeatMute: () => void
   onGlobalVocalGain: (value: number) => void
   isVocalMuted: boolean
   onToggleVocalMute: () => void
-  monitorEnabled: boolean
+  isMonitorMuted: boolean
   monitorGain: number
   onToggleMonitor: () => void
   onMonitorGain: (value: number) => void
@@ -65,32 +66,18 @@ function MuteButton({ muted, onToggle, label }: { muted: boolean; onToggle: () =
 export function Mixer({
   mix,
   onMasterGain,
+  isBeatMuted,
+  onToggleBeatMute,
   onGlobalVocalGain,
   isVocalMuted,
   onToggleVocalMute,
-  monitorEnabled,
+  isMonitorMuted,
   monitorGain,
   onToggleMonitor,
   onMonitorGain,
   volumeBoost,
   onToggleVolumeBoost,
 }: Props) {
-  // Beat muting is a transient UI convenience — remember the pre-mute value locally and
-  // restore it on unmute rather than adding persisted mute state to the project.
-  const [beatMuted, setBeatMuted] = useState(false)
-  const beatPreMute = useRef(mix.masterBeatGain)
-
-  const toggleBeatMute = () => {
-    if (beatMuted) {
-      onMasterGain(beatPreMute.current)
-      setBeatMuted(false)
-    } else {
-      beatPreMute.current = mix.masterBeatGain
-      onMasterGain(0)
-      setBeatMuted(true)
-    }
-  }
-
   return (
     <div className="mixer-rack">
       <div className="mixer-header">
@@ -99,7 +86,7 @@ export function Mixer({
       <div className="mixer-strips">
           <div className="mixer-strip-column">
             <ChannelStrip label="Beat Vol" value={mix.masterBeatGain} max={1} onChange={onMasterGain} />
-            <MuteButton muted={beatMuted} onToggle={toggleBeatMute} label="Beat" />
+            <MuteButton muted={isBeatMuted} onToggle={onToggleBeatMute} label="Beat" />
           </div>
           <div className="mixer-strip-column">
             <ChannelStrip label="Vocal Vol" value={mix.globalVocalGain} max={2} onChange={onGlobalVocalGain} accent />
@@ -107,7 +94,7 @@ export function Mixer({
           </div>
           <div className="mixer-strip-column">
             <ChannelStrip label="Mic Vol" value={monitorGain} max={2} onChange={onMonitorGain} />
-            <MuteButton muted={!monitorEnabled} onToggle={onToggleMonitor} label="Mic Monitor" />
+            <MuteButton muted={isMonitorMuted} onToggle={onToggleMonitor} label="Mic Monitor" />
           </div>
       </div>
       <div className="mixer-boost-row">

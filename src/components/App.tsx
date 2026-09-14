@@ -192,7 +192,8 @@ export default function App() {
   const playheadRef = useRef(0)
   const cursorRef = useRef(0)
   const lastCursorPublishRef = useRef(0)
-  const [monitorEnabled, setMonitorEnabled] = useState(false)
+  const [isBeatMuted, setBeatMuted] = useState(false)
+  const [isMonitorMuted, setMonitorMuted] = useState(true)
   const [monitorGain, setMonitorGain] = useState(0.8)
   const [metronomeEnabled, setMetronomeEnabled] = useState(false)
   const [metronomeVolume, setMetronomeVolume] = useState(0.5)
@@ -1448,7 +1449,8 @@ export default function App() {
       audioEngine.setMasterVocalMuted(session.isVocalMuted)
       setVocalMuted(session.isVocalMuted)
       setMonitorGain(session.monitorGain)
-      audioEngine.setMonitorGain(monitorEnabled ? session.monitorGain : 0)
+      audioEngine.setMonitorGain(session.monitorGain)
+      audioEngine.setMonitorMuted(isMonitorMuted)
       setLoopRange(session.loopRange)
       setLoopEnabled(session.loopEnabled)
       setWaveformResetKey((key) => key + 1)
@@ -1718,6 +1720,12 @@ export default function App() {
           mix={project.mix}
           volumeBoost={volumeBoost}
           onMasterGain={(v) => updateMix({ masterBeatGain: v })}
+          isBeatMuted={isBeatMuted}
+          onToggleBeatMute={() => {
+            const nextMuted = !isBeatMuted
+            audioEngine.setMasterBeatMuted(nextMuted)
+            setBeatMuted(nextMuted)
+          }}
           onGlobalVocalGain={(v) => {
             audioEngine.setMasterVocalGain(v)
             updateMix({ globalVocalGain: v })
@@ -1729,21 +1737,15 @@ export default function App() {
             audioEngine.setMasterVocalMuted(nextMuted)
             setVocalMuted(nextMuted)
           }}
-          monitorEnabled={monitorEnabled}
+          isMonitorMuted={isMonitorMuted}
           monitorGain={monitorGain}
           onToggleMonitor={() => {
-            if (monitorEnabled) {
-              audioEngine.setMonitorGain(0)
-              setMonitorEnabled(false)
-              return
+            const nextMuted = !isMonitorMuted
+            audioEngine.setMonitorMuted(nextMuted)
+            setMonitorMuted(nextMuted)
+            if (!nextMuted) {
+              audioEngine.startMicMonitor().catch((err) => setStatus(`Mic permission failed: ${String(err)}`))
             }
-            audioEngine
-              .startMicMonitor(monitorGain)
-              .then(() => {
-                audioEngine.setMonitorGain(monitorGain)
-                setMonitorEnabled(true)
-              })
-              .catch((err) => setStatus(`Mic permission failed: ${String(err)}`))
           }}
           onMonitorGain={(v) => {
             setMonitorGain(v)

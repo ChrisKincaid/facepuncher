@@ -109,8 +109,11 @@ export class AudioEngine {
   private loopPhaseOffset = 0
   private isPlaying = false
   private masterGainValue = 1
+  private masterBeatMuted = false
   private masterVocalGainValue = 1
   private vocalMuted = false
+  private monitorGainValue = 0.8
+  private monitorMuted = true
   private loopRegion?: { start: number; end: number }
   private metronomeGain?: GainNode
   private metronomeVolume = 0.5
@@ -141,8 +144,8 @@ export class AudioEngine {
       this.ctx = new AudioContext({ latencyHint: 'interactive' })
       this.ensureMonitorChain()
       this.masterVocalGain = this.ctx.createGain()
-      this.masterVocalGain.gain.value = this.vocalMuted ? 0 : this.masterVocalGainValue
       this.masterVocalGain.connect(this.monitorBus!)
+      this.updateMasterVocalGain()
       console.log('[Punchin] AudioContext created', { state: this.ctx.state, sampleRate: this.ctx.sampleRate })
     }
     return this.ctx
@@ -203,22 +206,39 @@ export class AudioEngine {
 
   setMasterBeatGain(value: number) {
     this.masterGainValue = value
-    if (this.beatGain) {
-      this.beatGain.gain.value = value
-    }
+    this.updateMasterBeatGain()
+  }
+
+  setMasterBeatMuted(muted: boolean) {
+    this.masterBeatMuted = muted
+    this.updateMasterBeatGain()
   }
 
   setMasterVocalGain(value: number) {
     this.masterVocalGainValue = Math.max(0, Math.min(2, value))
-    if (this.masterVocalGain && !this.vocalMuted) {
-      this.masterVocalGain.gain.value = this.masterVocalGainValue
-    }
+    this.updateMasterVocalGain()
   }
 
   setMasterVocalMuted(muted: boolean) {
     this.vocalMuted = muted
-    if (this.masterVocalGain) {
-      this.masterVocalGain.gain.value = muted ? 0 : this.masterVocalGainValue
+    this.updateMasterVocalGain()
+  }
+
+  private updateMasterBeatGain() {
+    if (this.ctx && this.beatGain) {
+      this.beatGain.gain.setTargetAtTime(this.masterBeatMuted ? 0 : this.masterGainValue, this.ctx.currentTime, 0.01)
+    }
+  }
+
+  private updateMasterVocalGain() {
+    if (this.ctx && this.masterVocalGain) {
+      this.masterVocalGain.gain.setTargetAtTime(this.vocalMuted ? 0 : this.masterVocalGainValue, this.ctx.currentTime, 0.01)
+    }
+  }
+
+  private updateMonitorGain() {
+    if (this.ctx && this.monitorGain) {
+      this.monitorGain.gain.setTargetAtTime(this.monitorMuted ? 0 : this.monitorGainValue, this.ctx.currentTime, 0.01)
     }
   }
 
@@ -274,8 +294,8 @@ export class AudioEngine {
     this.beatSource = source
 
     const gain = this.ctx.createGain()
-    gain.gain.value = this.masterGainValue
     this.beatGain = gain
+    this.updateMasterBeatGain()
     this.ensureMonitorChain()
     gain.connect(this.monitorBus!)
     source.connect(gain)
@@ -313,7 +333,7 @@ export class AudioEngine {
       this.masterVocalGain = this.ctx.createGain()
       this.masterVocalGain.connect(this.monitorBus!)
     }
-    this.masterVocalGain.gain.value = this.vocalMuted ? 0 : this.masterVocalGainValue
+    this.updateMasterVocalGain()
     return this.masterVocalGain
   }
 
@@ -588,7 +608,7 @@ export class AudioEngine {
     }
   }
 
-  async startMicMonitor(gainValue = 0.8) {
+  async startMicMonitor() {
     const ctx = await this.ensureContext()
     // A suspended context can silently queue audio and dump it later as a
     // burst, which looks exactly like a growing delay. Force it running.
@@ -610,10 +630,10 @@ export class AudioEngine {
     }
     if (!this.monitorGain) {
       this.monitorGain = ctx.createGain()
-      this.monitorGain.gain.value = gainValue
       this.monitorGain.connect(ctx.destination)
+      this.updateMonitorGain()
+      this.monitorSource.connect(this.monitorGain)
     }
-    this.monitorSource.connect(this.monitorGain)
     const track = this.monitorStream.getAudioTracks()[0]
     console.log('%c[MONITOR LATENCY]', 'color:#fff;background:#c0392b;padding:2px 6px', {
       contextState: ctx.state,
@@ -626,9 +646,13 @@ export class AudioEngine {
   }
 
   setMonitorGain(value: number) {
-    if (this.monitorGain) {
-      this.monitorGain.gain.value = value
-    }
+    this.monitorGainValue = Math.max(0, Math.min(2, value))
+    this.updateMonitorGain()
+  }
+
+  setMonitorMuted(muted: boolean) {
+    this.monitorMuted = muted
+    this.updateMonitorGain()
   }
 
   async prepareRecorder() {
