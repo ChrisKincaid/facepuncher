@@ -6,8 +6,8 @@ import { getBlob, putBlob, saveProject } from '../data/storage'
 const MANIFEST_ENTRY = 'project.json'
 const TAKES_DIR = 'takes'
 const FIST_VERSION = 1
-const GLOBAL_OVERLAY_MODES = new Set<GlobalOverlayMode>(['hard_cut', 'natural_decay', 'crossfade', 'ducking'])
-const BAR_OVERLAY_MODES = new Set<BarOverlayMode>(['global', 'hard_cut', 'natural_decay', 'crossfade', 'ducking'])
+const GLOBAL_OVERLAY_MODES = new Set<GlobalOverlayMode>(['hard_cut', 'natural_decay'])
+const BAR_OVERLAY_MODES = new Set<BarOverlayMode>(['global', 'hard_cut', 'natural_decay'])
 
 /** Live settings that sit outside the persisted Project but still define the session. */
 export interface FistSession {

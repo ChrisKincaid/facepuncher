@@ -1,4 +1,4 @@
-export type GlobalOverlayMode = 'hard_cut' | 'natural_decay' | 'crossfade' | 'ducking'
+export type GlobalOverlayMode = 'hard_cut' | 'natural_decay'
 export type BarOverlayMode = 'global' | GlobalOverlayMode
 
 export interface Project {

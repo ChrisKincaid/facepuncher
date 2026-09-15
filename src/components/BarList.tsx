@@ -7,18 +7,14 @@ import { DragVolumeSlider } from './DragVolumeSlider'
 type BarScale = 1 | 2 | 4
 
 const GLOBAL_OVERLAY_OPTIONS: { value: GlobalOverlayMode; label: string }[] = [
-  { value: 'hard_cut', label: 'Hard Cut (Default)' },
-  { value: 'natural_decay', label: 'Natural Decay' },
-  { value: 'crossfade', label: 'Crossfade Bridge' },
-  { value: 'ducking', label: 'Priority Ducking' },
+  { value: 'hard_cut', label: 'Tight' },
+  { value: 'natural_decay', label: 'Spill' },
 ]
 
 const BAR_OVERLAY_OPTIONS: { value: BarOverlayMode; label: string }[] = [
   { value: 'global', label: 'Follow Global' },
-  { value: 'hard_cut', label: 'Hard Cut' },
-  { value: 'natural_decay', label: 'Natural Decay' },
-  { value: 'crossfade', label: 'Crossfade Bridge' },
-  { value: 'ducking', label: 'Priority Ducking' },
+  { value: 'hard_cut', label: 'Tight' },
+  { value: 'natural_decay', label: 'Spill' },
 ]
 
 interface Props {
@@ -55,11 +51,11 @@ interface Props {
   onClearClipboard: () => void
   onMoveTakeToBar: (takeId: string, barIndex: number) => void
   onShowHelp: () => void
+  onShowTransitionHelp: () => void
   onFocusBar: (barIndex: number) => void
   onTakeGain: (takeId: string, value: number) => void
   onToggleVocalMute: () => void
   onGlobalOverlayDefaultChange: (mode: GlobalOverlayMode) => void
-  onResetBarOverlaysToGlobal: () => void
   onBarOverlayModeChange: (barIndex: number, mode: BarOverlayMode) => void
 }
 
@@ -97,11 +93,11 @@ export function BarList({
   onClearClipboard,
   onMoveTakeToBar,
   onShowHelp,
+  onShowTransitionHelp,
   onFocusBar,
   onTakeGain,
   onToggleVocalMute,
   onGlobalOverlayDefaultChange,
-  onResetBarOverlaysToGlobal,
   onBarOverlayModeChange,
 }: Props) {
   const [barScale, setBarScale] = useState<BarScale>(2)
@@ -194,25 +190,26 @@ export function BarList({
             <button type="button" className={`secondary ${isVocalMuted ? 'bars-mute-active' : ''}`} onClick={onToggleVocalMute} aria-pressed={isVocalMuted}>
               {isVocalMuted ? 'Unmute All' : 'Mute All'}
             </button>
-            <select
-              className="bars-global-overlay-select"
-              value={globalOverlayDefault}
-              aria-label="Global Overlay"
-              title="Global Overlay"
-              onChange={(event) => {
-                const value = event.target.value
-                if (value === 'reset_all') {
-                  onResetBarOverlaysToGlobal()
-                  return
-                }
-                onGlobalOverlayDefaultChange(value as GlobalOverlayMode)
-              }}
-            >
-              {GLOBAL_OVERLAY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-              <option value="reset_all">Reset All Bars to Global</option>
-            </select>
+            <div className="bars-transition-control">
+              <button type="button" className="secondary bars-transition-button" onClick={() => onGlobalOverlayDefaultChange(globalOverlayDefault === 'hard_cut' ? 'natural_decay' : 'hard_cut')}>
+                {GLOBAL_OVERLAY_OPTIONS.find((option) => option.value === globalOverlayDefault)?.label}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="section-help-button"
+                  aria-label="Explain vocal transitions"
+                  onClick={(event) => { event.stopPropagation(); onShowTransitionHelp() }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.stopPropagation()
+                      onShowTransitionHelp()
+                    }
+                  }}
+                >
+                  ?
+                </span>
+              </button>
+            </div>
             <div className="bars-toolbar-zoom" aria-label="Bar row zoom">
               <button type="button" className={`secondary bar-scale-button ${barScale === 1 ? 'bar-scale-disabled' : ''}`} aria-label="Zoom out" onClick={() => setBarScale((scale) => (scale === 4 ? 2 : 1))}>−</button>
               <span className="bar-scale-label">Zoom</span>

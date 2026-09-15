@@ -1655,6 +1655,23 @@ input[type='file'] {
   text-align: center;
 }
 
+.bars-transition-control {
+  min-width: 0;
+}
+
+.bars-transition-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.bars-transition-button .section-help-button {
+  flex: 0 0 auto;
+}
+
 .bars-global-overlay-select {
   width: 100%;
   min-width: 0;

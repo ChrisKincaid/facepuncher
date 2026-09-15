@@ -7,10 +7,10 @@ import type { GlobalOverlayMode } from '../data/models'
 export type BleedCancelPreset = 'light' | 'standard' | 'heavy'
 
 interface TakePlaybackOptions {
+  barIndex?: number
   overlayMode?: GlobalOverlayMode
   nextBarOffsetSec?: number
-  nextBarHasTake?: boolean
-  fadeInSec?: number
+  nextBarStartAt?: number
 }
 
 interface PcmStats {
@@ -40,8 +40,6 @@ if (!workletGlobal.__punchrapRecorderWorkletRegistered) {
 `
 
 export class AudioEngine {
-  private static readonly CROSSFADE_SEC = 0.1
-  private static readonly DUCK_GAIN = 0.5011872336272722
   private static readonly MAX_CAPTURE_PREPEND_SEC = 30
   private static readonly workletModulesLoaded = new WeakSet<AudioContext>()
 
@@ -62,6 +60,7 @@ export class AudioEngine {
   private beatSource?: AudioBufferSourceNode
   private takeSource?: AudioBufferSourceNode
   private takeGain?: GainNode
+  private activeTakeMode: GlobalOverlayMode = 'hard_cut'
   private masterVocalGain?: GainNode
   // Live-monitoring-only boost chain (speaker volume aid): beat + vocal buses feed into
   // this before the speakers. Never touched by offlineRender.ts, so exports are unaffected.
@@ -70,7 +69,7 @@ export class AudioEngine {
   private monitorLimiter?: DynamicsCompressorNode
   private volumeBoostEnabled = false
   // Takes scheduled ahead of time to continue directly from a previous bar's take.
-  private chainedSources: { source: AudioBufferSourceNode; gain: GainNode; barIndex: number }[] = []
+  private chainedSources: { source: AudioBufferSourceNode; gain: GainNode; barIndex: number; startAt: number }[] = []
   private monitorGain?: GainNode
   private monitorStream?: MediaStream
   private monitorSource?: MediaStreamAudioSourceNode
@@ -317,15 +316,6 @@ export class AudioEngine {
     console.log('[Punchin] beat source started', { contextState: this.ctx.state, offsetSec })
   }
 
-  private makeEqualPowerCurve(gainValue: number, fadeIn: boolean) {
-    const values = new Float32Array(32)
-    for (let i = 0; i < values.length; i++) {
-      const progress = i / (values.length - 1)
-      values[i] = gainValue * (fadeIn ? Math.sin(progress * Math.PI / 2) : Math.cos(progress * Math.PI / 2))
-    }
-    return values
-  }
-
   private getVocalOutputNode() {
     if (!this.ctx) return undefined
     if (!this.masterVocalGain) {
@@ -388,41 +378,21 @@ export class AudioEngine {
 
   private configureTakeEnvelope(source: AudioBufferSourceNode, gain: GainNode, startAt: number, offsetSec: number, durationSec: number, gainValue: number, options: TakePlaybackOptions = {}) {
     const safeGain = Math.max(0, gainValue)
-    const fadeInSec = Math.max(0, Math.min(options.fadeInSec ?? 0, durationSec))
     const naturalEndAt = startAt + durationSec
-    const fullGainAt = startAt + Math.max(0.004, fadeInSec)
-    const nextBarStartAt = options.nextBarOffsetSec === undefined ? undefined : startAt - offsetSec + options.nextBarOffsetSec
+    const nextBarStartAt = options.nextBarStartAt ?? (options.nextBarOffsetSec === undefined ? undefined : startAt - offsetSec + options.nextBarOffsetSec)
     const mode = options.overlayMode ?? 'hard_cut'
 
     if (mode === 'hard_cut' && nextBarStartAt !== undefined && nextBarStartAt > startAt && nextBarStartAt < naturalEndAt) {
-      gain.gain.value = safeGain
+      const fadeStartAt = Math.max(startAt, nextBarStartAt - 0.003)
+      gain.gain.setValueAtTime(safeGain, fadeStartAt)
+      gain.gain.linearRampToValueAtTime(0, nextBarStartAt)
       try { source.stop(nextBarStartAt) } catch { /* source may already be stopped */ }
       return
     }
 
     gain.gain.setValueAtTime(0, Math.max(0, startAt - 0.001))
-    if (fadeInSec > 0) gain.gain.setValueCurveAtTime(this.makeEqualPowerCurve(safeGain, true), startAt, fadeInSec)
-    else gain.gain.linearRampToValueAtTime(safeGain, startAt + 0.004)
-
-    if (nextBarStartAt !== undefined && nextBarStartAt > startAt && nextBarStartAt < naturalEndAt) {
-      gain.gain.setValueAtTime(safeGain, Math.max(fullGainAt, Math.min(nextBarStartAt, naturalEndAt - 0.001)))
-      if (mode === 'crossfade') {
-        const fadeStart = nextBarStartAt
-        const fadeSec = Math.min(AudioEngine.CROSSFADE_SEC, Math.max(0.01, naturalEndAt - fadeStart))
-        gain.gain.setValueCurveAtTime(this.makeEqualPowerCurve(safeGain, false), fadeStart, fadeSec)
-        try { source.stop(fadeStart + fadeSec) } catch { /* source may already be stopped */ }
-        return
-      }
-      if (mode === 'ducking' && options.nextBarHasTake) {
-        const duckAt = nextBarStartAt + Math.min(0.02, Math.max(0.004, naturalEndAt - nextBarStartAt))
-        gain.gain.linearRampToValueAtTime(safeGain * AudioEngine.DUCK_GAIN, duckAt)
-        gain.gain.setValueAtTime(safeGain * AudioEngine.DUCK_GAIN, Math.max(duckAt, naturalEndAt - 0.008))
-        gain.gain.linearRampToValueAtTime(0, naturalEndAt)
-        return
-      }
-    }
-
-    gain.gain.setValueAtTime(safeGain, Math.max(fullGainAt, naturalEndAt - 0.008))
+    gain.gain.linearRampToValueAtTime(safeGain, startAt + 0.004)
+    gain.gain.setValueAtTime(safeGain, Math.max(startAt + 0.004, naturalEndAt - 0.008))
     gain.gain.linearRampToValueAtTime(0, naturalEndAt)
   }
 
@@ -436,6 +406,9 @@ export class AudioEngine {
     const now = this.ctx.currentTime
     const startAt = now + Math.max(0, delaySec)
     const remaining = Math.max(0.001, buffer.duration - offsetSec)
+    const nextBarStartAt = options.nextBarStartAt ?? (options.nextBarOffsetSec === undefined ? undefined : startAt - offsetSec + options.nextBarOffsetSec)
+    const mode = options.overlayMode ?? 'hard_cut'
+    console.log('[DEBUG PLAYBACK SCHEDULE]', JSON.stringify({ barIndex: options.barIndex, mode, bufferDuration: buffer.duration, nextBarStartAt, willHardCut: mode === 'hard_cut' }, null, 2))
     this.configureTakeEnvelope(source, gain, startAt, offsetSec, remaining, gainValue, options)
     const output = this.getVocalOutputNode()
     if (!output) return
@@ -443,6 +416,7 @@ export class AudioEngine {
     gain.connect(output)
     this.takeSource = source
     this.takeGain = gain
+    this.activeTakeMode = options.overlayMode ?? 'hard_cut'
     source.onended = () => {
       source.disconnect()
       gain.disconnect()
@@ -451,6 +425,11 @@ export class AudioEngine {
     }
     source.start(startAt, Math.max(0, Math.min(offsetSec, Math.max(0, buffer.duration - 0.001))))
     return startAt
+  }
+
+  stopTakeAtBarEntry() {
+    if (this.activeTakeMode === 'natural_decay') return
+    this.stopTake()
   }
 
   // Schedule a take to start at an exact future AudioContext time with no fade in/out.
@@ -467,9 +446,12 @@ export class AudioEngine {
     source.connect(gain)
     gain.connect(output)
     const when = Math.max(this.ctx.currentTime, startAtCtxTime)
+    const nextBarStartAt = options.nextBarStartAt ?? (options.nextBarOffsetSec === undefined ? undefined : when + options.nextBarOffsetSec)
+    const mode = options.overlayMode ?? 'hard_cut'
+    console.log('[DEBUG PLAYBACK SCHEDULE]', JSON.stringify({ barIndex: options.barIndex ?? barIndex, mode, bufferDuration: buffer.duration, nextBarStartAt, willHardCut: mode === 'hard_cut' }, null, 2))
     this.configureTakeEnvelope(source, gain, when, 0, Math.max(0.001, buffer.duration), gainValue, options)
     source.start(when, 0)
-    this.chainedSources.push({ source, gain, barIndex })
+    this.chainedSources.push({ source, gain, barIndex, startAt: when })
     source.onended = () => {
       this.chainedSources = this.chainedSources.filter((entry) => entry.source !== source)
     }
@@ -480,6 +462,18 @@ export class AudioEngine {
   cancelChainedForBar(barIndex: number) {
     this.chainedSources = this.chainedSources.filter((entry) => {
       if (entry.barIndex !== barIndex) return true
+      try { entry.source.stop() } catch { /* already stopped/ended */ }
+      entry.source.disconnect()
+      entry.gain.disconnect()
+      return false
+    })
+  }
+
+  cancelFutureChainedTakes() {
+    if (!this.ctx) return
+    const now = this.ctx.currentTime
+    this.chainedSources = this.chainedSources.filter((entry) => {
+      if (entry.startAt <= now) return true
       try { entry.source.stop() } catch { /* already stopped/ended */ }
       entry.source.disconnect()
       entry.gain.disconnect()
@@ -576,6 +570,7 @@ export class AudioEngine {
       }
       if (fadeOutSec === 0) this.takeSource.disconnect()
       this.takeSource = undefined
+      this.activeTakeMode = 'hard_cut'
     }
     this.takeGain?.disconnect()
     this.takeGain = undefined
@@ -1137,8 +1132,8 @@ export class AudioEngine {
     return resolvedStartAt
   }
 
-  // endAtCtxTime should be the bar's true end instant. If it's still in the future when
-  // called (an early manual stop), we cap at "now" instead of waiting for it to arrive.
+  // endAtCtxTime may include a post-bar capture tail. If it's still in the future when
+  // called (an early manual stop), cap at "now" instead of waiting for it to arrive.
   async stopRecording(endAtCtxTime?: number): Promise<AudioBuffer | undefined> {
     if (!this.ctx || !this.activeRecording) {
       console.warn('%c[REC] STOP called with no active recorder', 'color:#c00')
@@ -1155,6 +1150,7 @@ export class AudioEngine {
     // appendCapturedFrame can't discard startFrame out from under us in the meantime.
     await this.waitForCapturedFrames(endFrame)
     const data = this.getCapturedRange(startFrame, endFrame)
+    console.log('[DEBUG FRAME SLICE]', { targetEndFrame, nowFrame, slicedFrames: data.length, sampleRate })
     this.activeRecording = undefined
     const expectedFrames = endFrame - startFrame
     if (this.captureBaseFrame !== undefined && startFrame < this.captureBaseFrame) {

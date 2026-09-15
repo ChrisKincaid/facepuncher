@@ -28,8 +28,9 @@ const PROJECT_ACCEPT = IS_MOBILE ? undefined : '.fist,*/*'
 const UNDO_WINDOW_SEC = 6
 const DETECT_BPM_MIN = 60
 const DETECT_BPM_MAX = 180
+const RECORDING_OVERHANG_SEC = 0.5
 
-type HelpTopic = 'volume' | 'project' | 'setup' | 'bars' | 'bar-boundaries' | 'vocal-timing' | 'bleed-control'
+type HelpTopic = 'volume' | 'project' | 'setup' | 'bars' | 'transitions' | 'bar-boundaries' | 'vocal-timing' | 'bleed-control'
 type MainSection = 'volume' | 'project' | 'setup' | 'bars'
 
 const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; text: string }[] }> = {
@@ -74,6 +75,13 @@ const HELP_CONTENT: Record<HelpTopic, { title: string; entries: { term: string; 
       { term: 'Actions', text: 'The ⇄ button on a bar opens Copy, Cut, and Delete. Copying or cutting a take activates cyan PASTE buttons across every valid destination bar.' },
       { term: 'Drag & Drop', text: 'Drag a take onto another bar to move it. Bars already holding 5 takes will refuse the drop.' },
       { term: 'Favorite / Lock', text: 'Star your best takes to lock them in place, protecting them while you record new passes.' },
+    ],
+  },
+  transitions: {
+    title: 'Vocal Transitions',
+    entries: [
+      { term: 'Tight', text: 'Cuts vocal playback immediately at the bar boundary with a 3ms micro-fade to eliminate clicks. Ideal for crisp punches, fast flows, and staccato deliveries.' },
+      { term: 'Spill', text: 'Allows vocal tails, held vowels, breaths, and room reverb to play naturally past the bar boundary to the end of the take buffer. Ideal for singing and sustained rhymes.' },
     ],
   },
   'bar-boundaries': {
@@ -132,7 +140,6 @@ export default function App() {
     setBar1AnchorTime,
     setBars,
     setGlobalOverlayDefault,
-    resetBarOverlayModesToGlobal,
     setBarOverlayMode,
     setAudioUrl,
     setBeatFile,
@@ -176,7 +183,7 @@ export default function App() {
   const isPlayingRef = useRef(false)
   const recordingActiveRef = useRef(false)
   const recordingPendingRef = useRef(false)
-  const recordingTargetRef = useRef<{ barIndex: number; slot: number } | null>(null)
+  const recordingTargetRef = useRef<{ barIndex: number; slot: number; captureEndSec: number } | null>(null)
   const lastPlayingBarRef = useRef<number | null>(null)
   const previousAudioTimeRef = useRef<number | null>(null)
   const waitLoggedForBarRef = useRef<number | null>(null)
@@ -189,6 +196,7 @@ export default function App() {
   const activeLoopingTakeBarRef = useRef<number | null>(null)
   const syncGenerationRef = useRef(0)
   const vocalSyncMsRef = useRef(project.latencyOffsetMs)
+  const projectRef = useRef(project)
   const playheadRef = useRef(0)
   const cursorRef = useRef(0)
   const lastCursorPublishRef = useRef(0)
@@ -679,6 +687,20 @@ export default function App() {
     isPlayingRef.current = false
   }, [audioLoaded])
 
+  const refreshTransportForTransitionChange = (applyModeChange: () => void) => {
+    applyModeChange()
+    if (!isPlayingRef.current || recordingActiveRef.current) return
+    const currentPos = audioEngine.currentTime
+    audioEngine.stop()
+    audioEngine.play(currentPos)
+    chainedThroughBarRef.current = -1
+    directTakeScheduledBarRef.current = null
+    lastPlayingBarRef.current = null
+    previousAudioTimeRef.current = null
+    setPlayhead(currentPos)
+    setCursor(currentPos)
+  }
+
   // Keeps the metronome phase-locked to the real beat grid: (re)starts it whenever
   // playback begins or the beat grid changes, stops it the instant playback ends.
   useEffect(() => {
@@ -799,15 +821,18 @@ export default function App() {
       return
     }
     try {
-      recordingTargetRef.current = { barIndex, slot: armedSlot }
+      const nextBar = project.bars[barIndex + 1]
+      const nextBarArmed = nextBar ? (armedTakeByBar[nextBar.index]?.length ?? 0) > 0 : false
+      const captureEndSec = bar.endSec + (nextBarArmed ? 0 : RECORDING_OVERHANG_SEC)
+      recordingTargetRef.current = { barIndex, slot: armedSlot, captureEndSec }
       // Recover the bar's true start instant even though we may be noticing this a few ms
       // late — the continuous capture buffer already has that audio, so recording from the
       // exact boundary (not "now") needs no manual sync compensation on playback.
       const trueStartAt = audioEngine.ctxTimeForPosition(bar.startSec)
-      const remainingSec = Math.max(0.01, bar.endSec - audioEngine.currentTime)
+      const remainingSec = Math.max(0.01, captureEndSec - audioEngine.currentTime)
       console.log('%c[FLOW] beginAutomaticRecording', 'color:#fff;background:#a60;padding:2px 6px', {
-        barIndex, armedSlot, barStartSec: bar.startSec.toFixed(3), barEndSec: bar.endSec.toFixed(3),
-        remainingSec: remainingSec.toFixed(3), playbackPos: audioEngine.currentTime.toFixed(3),
+        barIndex, armedSlot, barStartSec: bar.startSec.toFixed(3), barEndSec: bar.endSec.toFixed(3), captureEndSec: captureEndSec.toFixed(3),
+        nextBarArmed, remainingSec: remainingSec.toFixed(3), playbackPos: audioEngine.currentTime.toFixed(3),
       })
       await audioEngine.startRecording(trueStartAt)
       recordingActiveRef.current = true
@@ -818,6 +843,7 @@ export default function App() {
         console.log('%c[FLOW] recordTimer fired → stopRecordingFlow', 'color:#a60', { barIndex, afterMs: Math.round(remainingSec * 1000) })
         void stopRecordingFlow()
       }, remainingSec * 1000)
+      console.log('[DEBUG OVERHANG SCHEDULED]', { captureEndSec, recordTimerMs: remainingSec * 1000, nextBarArmed })
     } catch (err) {
       console.error('automatic recording failed', err)
       recordingPendingRef.current = false
@@ -833,7 +859,7 @@ export default function App() {
     const take = project.takes.find((item) => item.barIndex === barIndex && item.selected)
     if (!take) {
       console.log('%c[PLAY] no selected take', 'color:#888', { barIndex })
-      audioEngine.stopTake()
+      audioEngine.stopTakeAtBarEntry()
       return undefined
     }
     const gainValue = take.gain
@@ -885,24 +911,20 @@ export default function App() {
   const MAX_CHAIN_BARS = 32
 
   const getTakePlaybackOptions = useCallback((barIndex: number) => {
+    const currentProject = projectRef.current
     const resolveOverlayMode = (index: number): GlobalOverlayMode => {
-      const mode = project.bars[index]?.overlayMode
-      return mode && mode !== 'global' ? mode : project.globalOverlayDefault ?? 'hard_cut'
+      const mode = currentProject.bars[index]?.overlayMode
+      return mode && mode !== 'global' ? mode : currentProject.globalOverlayDefault ?? 'hard_cut'
     }
-    const barHasActivePlaybackTake = (index: number) => {
-      if (armedTakeByBar[index]?.length) return false
-      return project.takes.some((item) => item.barIndex === index && item.selected)
-    }
-    const bar = project.bars[barIndex]
-    const nextBar = project.bars[barIndex + 1]
-    const previousMode = barIndex > 0 ? resolveOverlayMode(barIndex - 1) : undefined
+    const bar = currentProject.bars[barIndex]
+    const nextBar = currentProject.bars[barIndex + 1]
     return {
+      barIndex,
       overlayMode: resolveOverlayMode(barIndex),
       nextBarOffsetSec: bar && nextBar ? nextBar.startSec - bar.startSec : undefined,
-      nextBarHasTake: nextBar ? barHasActivePlaybackTake(nextBar.index) : false,
-      fadeInSec: previousMode === 'crossfade' ? 0.1 : 0,
+      nextBarStartAt: nextBar ? audioEngine.ctxTimeForPosition(nextBar.startSec) : undefined,
     }
-  }, [armedTakeByBar, project.bars, project.globalOverlayDefault, project.takes])
+  }, [])
 
   // Schedule bar-after-bar takes at exact, back-to-back AudioContext times with no fade at
   // the seam, so a note held across two recorded takes plays as one continuous sound. Stops
@@ -1008,7 +1030,7 @@ export default function App() {
   // Changing a bar's take mid-playback must change what is heard on the current pass rather
   // than at the next loop wrap, so retarget the live vocal source right away.
   const applyLiveTakeChange = (barIndex: number, takeId?: string) => {
-    audioEngine.cancelChainedForBar(barIndex)
+    audioEngine.stopTake(0.008)
     chainedThroughBarRef.current = -1
     if (!isPlayingRef.current || recordingActiveRef.current) return
     const bar = project.bars[barIndex]
@@ -1021,6 +1043,12 @@ export default function App() {
     const take = project.takes.find((item) => item.takeId === takeId)
     if (take) void playSelectedTake(barIndex, 0, vocalSyncMsRef.current / 1000, position, take)
   }
+
+  useEffect(() => {
+    if (!isPlayingRef.current || recordingActiveRef.current) return
+    audioEngine.cancelFutureChainedTakes()
+    chainedThroughBarRef.current = -1
+  }, [project.bars, project.globalOverlayDefault])
 
   const handleSelectTake = (barIndex: number, takeId: string) => {
     selectTake(barIndex, takeId)
@@ -1241,15 +1269,15 @@ export default function App() {
     }
     const recordingTarget = recordingTargetRef.current
     const targetBar = recordingTarget ? project.bars[recordingTarget.barIndex] : undefined
-    // Recompute the bar's true end instant fresh, right now — correct whether this is the
-    // scheduled on-time stop (already there) or an early manual stop (still in the future,
-    // in which case stopRecording caps it at "now" itself).
-    const trueEndAt = targetBar ? audioEngine.ctxTimeForPosition(targetBar.endSec) : undefined
+    // Recompute the selected capture endpoint on the audio clock. An early manual stop is
+    // still capped at "now" by stopRecording, while scheduled stops include any safe tail.
+    const trueEndAt = recordingTarget ? audioEngine.ctxTimeForPosition(recordingTarget.captureEndSec) : undefined
     console.log('%c[FLOW] stopRecordingFlow', 'color:#fff;background:#084;padding:2px 6px', {
       target: recordingTarget,
       trueEndAt,
     })
     const buffer = await audioEngine.stopRecording(trueEndAt)
+    console.log('[DEBUG RECORD RESULT]', JSON.stringify({ bufferDuration: buffer?.duration, barDuration: targetBar ? targetBar.endSec - targetBar.startSec : undefined }, null, 2))
     if (!buffer) {
       recordingPendingRef.current = false
       recordingTargetRef.current = null
@@ -1304,6 +1332,7 @@ export default function App() {
   const [timeEditValue, setTimeEditValue] = useState<string | null>(null)
 
   // Keep refs in sync every render
+  projectRef.current = project
   playheadRef.current = playhead
   cursorRef.current = cursor
 
@@ -1505,10 +1534,12 @@ export default function App() {
           if (!blob) return null
           const buf = await ctx.decodeAudioData(await blob.arrayBuffer())
           const bar = project.bars[take.barIndex]
-          return bar ? { buffer: buf, startSec: bar.startSec, gain: take.gain, barIndex: take.barIndex } : null
+          if (!bar) return null
+          const mode = bar.overlayMode && bar.overlayMode !== 'global' ? bar.overlayMode : project.globalOverlayDefault
+          return { buffer: buf, startSec: bar.startSec, gain: take.gain, barIndex: take.barIndex, overlayMode: mode, nextBarStartSec: project.bars[take.barIndex + 1]?.startSec }
         }),
       )
-      const filtered = renderedTakes.filter(Boolean) as { buffer: AudioBuffer; startSec: number; gain: number; barIndex: number }[]
+      const filtered = renderedTakes.filter(Boolean) as { buffer: AudioBuffer; startSec: number; gain: number; barIndex: number; overlayMode: GlobalOverlayMode; nextBarStartSec?: number }[]
       const beatBlob = project.beat.fileId ? blobCache.current.get(project.beat.fileId) : undefined
       let beatBuffer: AudioBuffer | undefined
       if (beatBlob && !vocalsOnly) beatBuffer = await ctx.decodeAudioData(await beatBlob.arrayBuffer())
@@ -2221,11 +2252,20 @@ export default function App() {
             onClearClipboard={handleClearClipboard}
             onMoveTakeToBar={handleTakeDropOnBar}
             onShowHelp={() => setHelpTopic('bars')}
+            onShowTransitionHelp={() => setHelpTopic('transitions')}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
-            onGlobalOverlayDefaultChange={setGlobalOverlayDefault}
-            onResetBarOverlaysToGlobal={resetBarOverlayModesToGlobal}
-            onBarOverlayModeChange={setBarOverlayMode}
+            onGlobalOverlayDefaultChange={(mode) => {
+              console.log('[GLOBAL TOGGLE CLICKED]', { newGlobal: mode, projectGlobal: project.globalOverlayDefault, bar0Mode: project.bars[0]?.overlayMode })
+              refreshTransportForTransitionChange(() => {
+                setGlobalOverlayDefault(mode)
+                projectRef.current = useStore.getState().project
+              })
+            }}
+            onBarOverlayModeChange={(barIndex, mode) => refreshTransportForTransitionChange(() => {
+              setBarOverlayMode(barIndex, mode)
+              projectRef.current = useStore.getState().project
+            })}
             onToggleVocalMute={() => {
               const nextMuted = !isVocalMuted
               audioEngine.setMasterVocalMuted(nextMuted)
