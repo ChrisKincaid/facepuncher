@@ -2050,6 +2050,12 @@ input[type='file'] {
   color: var(--accent) !important;
 }
 
+.bar-overlay-active {
+  color: var(--accent-2) !important;
+  border-color: rgba(246, 193, 119, 0.75) !important;
+  box-shadow: 0 0 6px rgba(246, 193, 119, 0.45);
+}
+
 .bar-transfer-menu {
   position: absolute;
   top: 100%;
@@ -2368,6 +2374,40 @@ input[type='file'] {
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
+}
+
+.transition-confirmation-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(300px, 90vw);
+  padding: 16px;
+  color: var(--text);
+  background: #1b1d29;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
+}
+
+.transition-confirmation-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.transition-confirmation-modal p {
+  margin: 0;
+  font-size: 10px;
+}
+
+.transition-confirmation-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.transition-confirmation-actions button {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .help-modal {

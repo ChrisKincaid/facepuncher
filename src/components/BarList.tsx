@@ -349,7 +349,7 @@ export function BarList({
                 <div className="bar-overlay-wrap">
                   <button
                     type="button"
-                    className={`secondary bar-overlay-button ${openOverlayBar === bar.index ? 'bar-overlay-open' : ''}`}
+                    className={`secondary bar-overlay-button ${openOverlayBar === bar.index ? 'bar-overlay-open' : ''} ${bar.overlayMode && bar.overlayMode !== 'global' ? 'bar-overlay-active' : ''}`}
                     disabled={!selectedTake}
                     aria-haspopup="menu"
                     aria-expanded={openOverlayBar === bar.index}

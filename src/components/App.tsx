@@ -140,6 +140,7 @@ export default function App() {
     setBar1AnchorTime,
     setBars,
     setGlobalOverlayDefault,
+    resetBarOverlayModesToGlobal,
     setBarOverlayMode,
     setAudioUrl,
     setBeatFile,
@@ -215,6 +216,7 @@ export default function App() {
   useEffect(() => { bleedCancelPresetRef.current = bleedCancelPreset }, [bleedCancelPreset])
   const [isCalibratingMic, setIsCalibratingMic] = useState(false)
   const [showCalibrationModal, setShowCalibrationModal] = useState(false)
+  const [pendingGlobalTransition, setPendingGlobalTransition] = useState<GlobalOverlayMode | null>(null)
   const [calibrationCountdown, setCalibrationCountdown] = useState(0)
   const [detectBusy, setDetectBusy] = useState(false)
   const [bpmInput, setBpmInput] = useState(() => project.beat.bpm ? String(project.beat.bpm) : '')
@@ -687,18 +689,31 @@ export default function App() {
     isPlayingRef.current = false
   }, [audioLoaded])
 
-  const refreshTransportForTransitionChange = (applyModeChange: () => void) => {
+  const applyTransitionChange = (applyModeChange: () => void) => {
     applyModeChange()
+    projectRef.current = useStore.getState().project
     if (!isPlayingRef.current || recordingActiveRef.current) return
-    const currentPos = audioEngine.currentTime
-    audioEngine.stop()
-    audioEngine.play(currentPos)
+    audioEngine.cancelFutureChainedTakes()
     chainedThroughBarRef.current = -1
-    directTakeScheduledBarRef.current = null
-    lastPlayingBarRef.current = null
-    previousAudioTimeRef.current = null
-    setPlayhead(currentPos)
-    setCursor(currentPos)
+  }
+
+  const handleGlobalTransitionChange = (mode: GlobalOverlayMode) => {
+    console.log('[GLOBAL TOGGLE CLICKED]', { newGlobal: mode, projectGlobal: project.globalOverlayDefault, bar0Mode: project.bars[0]?.overlayMode })
+    if (project.bars.some((bar) => bar.overlayMode && bar.overlayMode !== 'global')) {
+      setPendingGlobalTransition(mode)
+      return
+    }
+    applyTransitionChange(() => setGlobalOverlayDefault(mode))
+  }
+
+  const applyPendingGlobalTransition = (overwriteOverrides: boolean) => {
+    const mode = pendingGlobalTransition
+    if (!mode) return
+    applyTransitionChange(() => {
+      if (overwriteOverrides) resetBarOverlayModesToGlobal()
+      setGlobalOverlayDefault(mode)
+    })
+    setPendingGlobalTransition(null)
   }
 
   // Keeps the metronome phase-locked to the real beat grid: (re)starts it whenever
@@ -2255,16 +2270,9 @@ export default function App() {
             onShowTransitionHelp={() => setHelpTopic('transitions')}
             onFocusBar={setCurrentBar}
             onTakeGain={setTakeGain}
-            onGlobalOverlayDefaultChange={(mode) => {
-              console.log('[GLOBAL TOGGLE CLICKED]', { newGlobal: mode, projectGlobal: project.globalOverlayDefault, bar0Mode: project.bars[0]?.overlayMode })
-              refreshTransportForTransitionChange(() => {
-                setGlobalOverlayDefault(mode)
-                projectRef.current = useStore.getState().project
-              })
-            }}
-            onBarOverlayModeChange={(barIndex, mode) => refreshTransportForTransitionChange(() => {
+            onGlobalOverlayDefaultChange={handleGlobalTransitionChange}
+            onBarOverlayModeChange={(barIndex, mode) => applyTransitionChange(() => {
               setBarOverlayMode(barIndex, mode)
-              projectRef.current = useStore.getState().project
             })}
             onToggleVocalMute={() => {
               const nextMuted = !isVocalMuted
@@ -2300,6 +2308,20 @@ export default function App() {
               ? <span className="calibration-countdown" aria-hidden="true">{calibrationCountdown}</span>
               : <span className="button-spinner" aria-hidden="true" />}
             <p>Calibrating Mic Latency... Stand by for test clicks. Please keep your room quiet.</p>
+          </div>
+        </div>
+      )}
+
+      {pendingGlobalTransition && (
+        <div className="calibration-modal-overlay" role="presentation" onClick={() => setPendingGlobalTransition(null)}>
+          <div className="transition-confirmation-modal" role="dialog" aria-modal="true" aria-label="Apply transition setting to all bars" onClick={(event) => event.stopPropagation()}>
+            <div className="transition-confirmation-title">Apply to all bars?</div>
+            <p>Some bars have custom seam settings.</p>
+            <div className="transition-confirmation-actions">
+              <button type="button" className="overwrite-modal-proceed" onClick={() => applyPendingGlobalTransition(true)}>Overwrite All</button>
+              <button type="button" className="secondary" onClick={() => applyPendingGlobalTransition(false)}>Keep Custom</button>
+              <button type="button" className="overwrite-modal-cancel" onClick={() => setPendingGlobalTransition(null)}>Cancel</button>
+            </div>
           </div>
         </div>
       )}
