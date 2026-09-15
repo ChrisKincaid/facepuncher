@@ -111,6 +111,7 @@ export class AudioEngine {
   private masterBeatMuted = false
   private masterVocalGainValue = 1
   private vocalMuted = false
+  private transportScrubbing = false
   private monitorGainValue = 0.8
   private monitorMuted = true
   private loopRegion?: { start: number; end: number }
@@ -223,15 +224,21 @@ export class AudioEngine {
     this.updateMasterVocalGain()
   }
 
+  setTransportScrubbing(scrubbing: boolean) {
+    this.transportScrubbing = scrubbing
+    this.updateMasterBeatGain()
+    this.updateMasterVocalGain()
+  }
+
   private updateMasterBeatGain() {
     if (this.ctx && this.beatGain) {
-      this.beatGain.gain.setTargetAtTime(this.masterBeatMuted ? 0 : this.masterGainValue, this.ctx.currentTime, 0.01)
+      this.beatGain.gain.setTargetAtTime(this.masterBeatMuted || this.transportScrubbing ? 0 : this.masterGainValue, this.ctx.currentTime, 0.005)
     }
   }
 
   private updateMasterVocalGain() {
     if (this.ctx && this.masterVocalGain) {
-      this.masterVocalGain.gain.setTargetAtTime(this.vocalMuted ? 0 : this.masterVocalGainValue, this.ctx.currentTime, 0.01)
+      this.masterVocalGain.gain.setTargetAtTime(this.vocalMuted || this.transportScrubbing ? 0 : this.masterVocalGainValue, this.ctx.currentTime, 0.005)
     }
   }
 

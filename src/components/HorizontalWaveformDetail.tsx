@@ -13,6 +13,9 @@ interface Props {
   loopRange?: { start: number; end: number }
   onLoopRangeChange: (start: number, end: number) => void
   onSeek: (time: number) => void
+  onScrubStart?: () => void
+  onScrubChange?: (time: number) => void
+  onScrubEnd?: (time: number) => void
   transportMode?: boolean
   getPlaybackTime?: () => number
 }
@@ -38,6 +41,9 @@ export function HorizontalWaveformDetail({
   loopRange,
   onLoopRangeChange,
   onSeek,
+  onScrubStart,
+  onScrubChange,
+  onScrubEnd,
   transportMode = false,
   getPlaybackTime,
 }: Props) {
@@ -490,7 +496,7 @@ export function HorizontalWaveformDetail({
     const canvas = canvasRef.current
     if (!canvas || !totalDuration) return 0
     const rect = canvas.getBoundingClientRect()
-    const ratio = (clientX - rect.left) / rect.width
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
     const dur = totalDuration
     const z = zoomRef.current
     const center = viewCenterRef.current
@@ -588,6 +594,7 @@ export function HorizontalWaveformDetail({
       mode: transportMode ? 'playhead' : handle === 'start' ? 'start-handle' : handle === 'end' ? 'end-handle' : isNearPlayhead(e.clientX) ? 'playhead' : 'select',
       moved: false,
     }
+    if (transportMode || pointerDragRef.current.mode === 'playhead') onScrubStart?.()
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
@@ -599,11 +606,11 @@ export function HorizontalWaveformDetail({
       if (Math.abs(e.clientX - drag.startX) > 4) drag.moved = true
       if (drag.moved) {
         if (transportMode) {
-          onSeek(xToTime(e.clientX))
+          onScrubChange?.(xToTime(e.clientX))
           return
         }
         const boundary = nearestBoundary(xToTime(e.clientX))
-        if (drag.mode === 'playhead') onSeek(xToTime(e.clientX))
+        if (drag.mode === 'playhead') onScrubChange?.(xToTime(e.clientX))
         else if (drag.mode === 'select') setLoopFromBoundaries(nearestBoundary(drag.startTime), boundary)
         else {
           const bounds = loopBounds()
@@ -630,7 +637,9 @@ export function HorizontalWaveformDetail({
     const drag = pointerDragRef.current
     if (!drag || drag.pointerId !== e.pointerId) return
     pointerDragRef.current = null
-    if (!drag.moved) onSeek(xToTime(e.clientX))
+    const targetTime = xToTime(e.clientX)
+    if (transportMode || drag.mode === 'playhead') onScrubEnd?.(targetTime)
+    else if (!drag.moved) onSeek(targetTime)
   }
 
   const handleMouseLeave = () => {
@@ -646,7 +655,11 @@ export function HorizontalWaveformDetail({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerCancel={() => { pointerDragRef.current = null }}
+        onPointerCancel={(event) => {
+          const drag = pointerDragRef.current
+          pointerDragRef.current = null
+          if (drag && (transportMode || drag.mode === 'playhead')) onScrubEnd?.(xToTime(event.clientX))
+        }}
         onMouseLeave={handleMouseLeave}
         title={transportMode ? 'Drag to scrub playback position' : 'Click to set play position · drag to set loop range · drag cyan handles to adjust loop bounds'}
         style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}

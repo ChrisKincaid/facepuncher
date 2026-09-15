@@ -176,6 +176,7 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState(0)
   const [playhead, setPlayhead] = useState(0)
   const [cursor, setCursor] = useState(0)   // live playback position (moves during play)
+  const isScrubbingRef = useRef(false)
   const recordTimer = useRef<number | null>(null)
   const startTimer = useRef<number | null>(null)
   const blobCache = useRef<Map<string, Blob>>(new Map())
@@ -630,6 +631,34 @@ export default function App() {
     },
     [setPlayhead],
   )
+
+  const startScrub = () => {
+    isScrubbingRef.current = true
+    audioEngine.setTransportScrubbing(true)
+  }
+
+  const updateScrubPosition = (time: number) => {
+    setPlayhead(time)
+    setCursor(time)
+  }
+
+  const finishScrub = (time: number) => {
+    if (!isScrubbingRef.current) return
+    isScrubbingRef.current = false
+    if (loopEnabled && loopRange) {
+      const loopStart = project.bars[loopRange.start]?.startSec
+      const loopEnd = project.bars[loopRange.end]?.endSec
+      if (loopStart !== undefined && loopEnd !== undefined && (time < loopStart || time > loopEnd)) {
+        setLoopEnabled(false)
+        audioEngine.setLoop(undefined, undefined)
+      }
+    }
+    chainedThroughBarRef.current = -1
+    setPlayhead(time)
+    setCursor(time)
+    audioEngine.seek(time)
+    audioEngine.setTransportScrubbing(false)
+  }
 
   /** Set the Bar 1 offset — reused by drag, button, and number input */
   const applyOffset = useCallback((offsetSec: number) => {
@@ -1610,6 +1639,9 @@ export default function App() {
               loopRange={loopRange}
               onLoopRangeChange={handleLoopChange}
               onSeek={handleSeek}
+              onScrubStart={startScrub}
+              onScrubChange={updateScrubPosition}
+              onScrubEnd={finishScrub}
             />
             <div className="waveform-time-overlay">
               {timeEditValue !== null ? (
@@ -1659,6 +1691,9 @@ export default function App() {
             loopRange={loopRange}
             onLoopRangeChange={handleLoopChange}
             onSeek={handleSeek}
+            onScrubStart={startScrub}
+            onScrubChange={updateScrubPosition}
+            onScrubEnd={finishScrub}
             transportMode
             getPlaybackTime={() => audioEngine.currentTime}
           />
