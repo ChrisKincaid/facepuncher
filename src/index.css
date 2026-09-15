@@ -1631,16 +1631,16 @@ input[type='file'] {
 
 .bars-toolbar {
   display: grid;
-  gap: 3px;
+  gap: 6px;
   width: 100%;
   margin-bottom: 3px;
 }
 
 .bars-toolbar-top-row {
   display: grid;
-  grid-template-columns: minmax(96px, 0.7fr) minmax(150px, 1fr) auto;
-  align-items: stretch;
-  gap: 3px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 6px;
 }
 
 .bars-toolbar-mode,
@@ -1666,7 +1666,8 @@ input[type='file'] {
 .bars-toolbar-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
+  align-items: center;
+  gap: 6px;
 }
 
 .bars-toolbar-actions button {
@@ -1680,6 +1681,13 @@ input[type='file'] {
   color: var(--danger);
   border-color: rgba(255, 107, 107, 0.7);
   background: rgba(255, 107, 107, 0.08);
+}
+
+.bars-mute-active {
+  color: #241900 !important;
+  border-color: #f6c177 !important;
+  background: #f6c177 !important;
+  box-shadow: 0 0 8px rgba(246, 193, 119, 0.7);
 }
 
 .bars-toolbar-zoom {

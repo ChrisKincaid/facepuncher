@@ -25,12 +25,10 @@ interface Props {
   expanded: boolean
   onToggleSection: () => void
   controlsCollapsed: boolean
-  onToggleControls: () => void
   bars: Bar[]
   emptyMessage: string
   audioBuffer?: AudioBuffer
   playhead: number
-  loopEnabled: boolean
   loopRange?: { start: number; end: number }
   currentBarIndex: number
   isRecording: boolean
@@ -69,12 +67,10 @@ export function BarList({
   expanded,
   onToggleSection,
   controlsCollapsed,
-  onToggleControls,
   bars,
   emptyMessage,
   audioBuffer,
   playhead,
-  loopEnabled,
   loopRange,
   currentBarIndex,
   isRecording,
@@ -115,15 +111,12 @@ export function BarList({
   const [dropTargetBar, setDropTargetBar] = useState<number | null>(null)
   const [justPasted, setJustPasted] = useState(false)
   const [armAllToast, setArmAllToast] = useState<string | null>(null)
-  const [isCollapsingControls, setIsCollapsingControls] = useState(false)
   const pastedTimer = useRef<number | null>(null)
   const armAllToastTimer = useRef<number | null>(null)
-  const collapseTimer = useRef<number | null>(null)
 
   useEffect(() => () => {
     if (pastedTimer.current) window.clearTimeout(pastedTimer.current)
     if (armAllToastTimer.current) window.clearTimeout(armAllToastTimer.current)
-    if (collapseTimer.current) window.clearTimeout(collapseTimer.current)
   }, [])
 
   // A copy stays on the clipboard for repeat pastes, so the banner is the only place
@@ -138,15 +131,12 @@ export function BarList({
     }, 1600)
   }
 
-  const targetBars = loopEnabled && loopRange && bars[loopRange.start] && bars[loopRange.end]
-    ? bars.filter((bar) => bar.index >= loopRange.start && bar.index <= loopRange.end)
-    : bars
-  const eligibleArmAllBars = targetBars.filter((bar) => {
+  const eligibleArmAllBars = bars.filter((bar) => {
     const takeCount = takes.filter((take) => take.barIndex === bar.index).length
     return takeCount < 5
   })
-  const fullArmAllBars = targetBars.filter((bar) => takes.filter((take) => take.barIndex === bar.index).length >= 5)
-  const allEligibleBarsArmed = eligibleArmAllBars.length > 0 && eligibleArmAllBars.every((bar) => (armedTakeByBar[bar.index]?.length ?? 0) === 1)
+  const fullArmAllBars = bars.filter((bar) => takes.filter((take) => take.barIndex === bar.index).length >= 5)
+  const hasArmedBars = bars.some((bar) => (armedTakeByBar[bar.index]?.length ?? 0) > 0)
   const showArmAllToast = (message: string) => {
     setArmAllToast(message)
     if (armAllToastTimer.current) window.clearTimeout(armAllToastTimer.current)
@@ -162,10 +152,6 @@ export function BarList({
       showArmAllToast(`Bars ${labels}${suffix} reached the 5-take limit and were skipped`)
     }
     if (!eligibleArmAllBars.length) return
-    if (allEligibleBarsArmed) {
-      eligibleArmAllBars.forEach((bar) => onDisarmTake(bar.index))
-      return
-    }
 
     const assignments: Array<{ barIndex: number; slot: number }> = []
     eligibleArmAllBars.forEach((bar) => {
@@ -180,14 +166,10 @@ export function BarList({
       onArmTakesForBars(assignments)
     }
   }
-  const collapseControls = () => {
-    setIsCollapsingControls(true)
-    onToggleControls()
-    if (collapseTimer.current) window.clearTimeout(collapseTimer.current)
-    collapseTimer.current = window.setTimeout(() => {
-      collapseTimer.current = null
-      setIsCollapsingControls(false)
-    }, 100)
+  const handleUnarmAll = () => {
+    bars.forEach((bar) => {
+      if ((armedTakeByBar[bar.index]?.length ?? 0) > 0) onDisarmTake(bar.index)
+    })
   }
   return (
     <div className={`panel bar-list-panel accordion-panel ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
@@ -209,18 +191,8 @@ export function BarList({
       {expanded && bars.length > 0 && !controlsCollapsed && (
         <div className="bars-toolbar" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <div className="bars-toolbar-top-row">
-            <button
-              type="button"
-              className="secondary bar-focus-button bars-toolbar-mode"
-              aria-pressed={false}
-              title="Hide bar controls"
-              onPointerDown={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                collapseControls()
-              }}
-            >
-              Hide Controls
+            <button type="button" className={`secondary ${isVocalMuted ? 'bars-mute-active' : ''}`} onClick={onToggleVocalMute} aria-pressed={isVocalMuted}>
+              {isVocalMuted ? 'Unmute All' : 'Mute All'}
             </button>
             <select
               className="bars-global-overlay-select"
@@ -248,16 +220,11 @@ export function BarList({
             </div>
           </div>
           <div className="bars-toolbar-actions">
-            <button type="button" className="secondary" onClick={onToggleVocalMute} aria-pressed={isVocalMuted}>
-              {isVocalMuted ? 'Unmute All' : 'Mute All'}
+            <button type="button" className="secondary" disabled={!eligibleArmAllBars.length} onClick={handleArmAll}>
+              Arm All
             </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={!eligibleArmAllBars.length}
-              onClick={handleArmAll}
-            >
-              {allEligibleBarsArmed ? 'Unarm All' : 'Arm All'}
+            <button type="button" className="secondary" disabled={!hasArmedBars} onClick={handleUnarmAll}>
+              Unarm All
             </button>
             <button
               type="button"
@@ -297,7 +264,7 @@ export function BarList({
         </div>
       )}
 
-      <div className={`bar-list bar-scale-${barScale}x ${isCollapsingControls ? 'bar-list-transitioning' : ''}`} tabIndex={0}>
+      <div className={`bar-list bar-scale-${barScale}x`} tabIndex={0}>
         {bars.map((bar) => {
           const active = playhead >= bar.startSec && playhead < bar.endSec
           const inLoop = loopRange && bar.index >= loopRange.start && bar.index <= loopRange.end

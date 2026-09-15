@@ -2145,12 +2145,10 @@ export default function App() {
             expanded={showBars}
             onToggleSection={() => toggleAccordionPanel('bars')}
             controlsCollapsed={barsControlsCollapsed}
-            onToggleControls={toggleBarsControls}
             bars={project.bars}
             emptyMessage="Set Bar 1 in Beat Setup to generate bars"
             audioBuffer={audioEngine.beatAudioBuffer}
             playhead={displayPos}
-            loopEnabled={loopEnabled}
             loopRange={loopRange}
             currentBarIndex={currentBarIndex}
             isRecording={isRecording}
