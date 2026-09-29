@@ -20,6 +20,7 @@ import type { FistPreset } from '../utils/presetService'
 import type { GlobalOverlayMode, Take } from '../data/models'
 
 const FALLBACK_LOOP_BARS = 16
+const VIDEO_GUIDES_URL = 'https://youtube.com/playlist?list=PLaQ2EXjF0kGk&si=lmg0TwlP7PSmCJdb'
 // Android and iOS route an audio accept list to capture apps and the gallery; omitting it sends
 // the picker straight to the file browser. Desktop keeps the filter.
 const IS_MOBILE = /android|iphone|ipad|ipod/i.test(navigator.userAgent)
@@ -776,7 +777,7 @@ export default function App() {
       setCalibrationCountdown(0)
       const result = await audioEngine.runLatencyCalibration()
       if (result.status === 'no-signal') {
-        showProjectToast('No speaker feedback detected. If you are using headphones, please use the \u201cShift Vocals\u201d slider or nudge buttons to set your timing manually.', 9000, true)
+        showProjectToast('No speaker feedback detected. If you are using headphones, use the vocal timing nudge buttons or Exact ms to set your timing manually.', 9000, true)
         setStatus('Mic latency calibration cancelled \u2014 no speaker feedback detected.')
       } else {
         updateGlobalSync(result.delayMs)
@@ -1614,6 +1615,9 @@ export default function App() {
               brought to you by{' '}
               <a href="https://boxbap.com" target="_blank" rel="noopener noreferrer">BOXBAP</a>
             </div>
+            <a className="video-guides-link" href={VIDEO_GUIDES_URL} target="_blank" rel="noopener noreferrer">
+              Video guides
+            </a>
           </div>
         <div className={`section-collapsible waveform-section ${showWaveform ? '' : 'is-collapsed'}`}>
         <div className="section-body">
@@ -2143,7 +2147,8 @@ export default function App() {
                 >
                   {isCalibratingMic ? 'Calibrating\u2026' : 'Calibrate Mic Timing'}
                 </button>
-                <label className="flex-gap">
+                {/* Keep the slider wired up for later; remove shift-vocals-slider to show it again. */}
+                <label className="flex-gap shift-vocals-slider">
                   Shift vocals
                   <input
                     type="range"

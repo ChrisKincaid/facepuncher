@@ -912,6 +912,22 @@ body {
   text-decoration: underline;
 }
 
+.video-guides-link {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  padding: 4px 5px;
+  font-size: 8px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.video-guides-link:hover,
+.video-guides-link:focus-visible {
+  text-decoration: underline;
+}
+
 .browser-warning {
   display: flex;
   align-items: center;
@@ -1079,7 +1095,7 @@ body {
 .project-export-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
+  gap: 6px;
   width: 100%;
 }
 
@@ -1313,8 +1329,8 @@ body {
   align-items: center;
 }
 
-/* Reset and Calibrate now live inside .playback-sync-buttons, so this is a three-part
-   row: shift slider, exact ms, then the whole nudge/action cluster. */
+/* The visible timing row keeps calibration, Exact ms, and the nudge buttons;
+  the Shift vocals slider remains wired in App.tsx but hidden above. */
 .playback-sync-controls {
   display: flex;
   flex-wrap: wrap;
@@ -1326,6 +1342,11 @@ body {
 .playback-sync-controls > .flex-gap {
   flex-wrap: nowrap;
   white-space: nowrap;
+}
+
+/* The Shift vocals slider stays wired in App.tsx for a possible return. */
+.playback-sync-controls .shift-vocals-slider {
+  display: none;
 }
 
 .playback-sync-buttons {
@@ -2702,6 +2723,31 @@ input[type='file'] {
   .beat-setup-panel .controls > * {
     align-self: stretch;
     min-width: 0;
+  }
+
+  .beat-setup-tempo-group,
+  .beat-setup-metronome-group {
+    flex: 1 1 auto;
+  }
+
+  .beat-setup-tempo-group {
+    justify-content: space-between;
+  }
+
+  .beat-setup-metronome-volume {
+    flex: 1 1 50px;
+    min-width: 50px;
+  }
+
+  .beat-setup-tempo-group .beat-setup-group-label,
+  .beat-setup-tempo-group .transport-bpm,
+  .beat-setup-tempo-group > .flex-gap {
+    font-size: 8px;
+  }
+
+  .beat-setup-tempo-group .transport-bpm button,
+  .beat-setup-metronome-group button {
+    font-size: 7.5px;
   }
 
   .beat-setup-actions button,
